@@ -16,11 +16,8 @@ import re
 
 log = logging.getLogger(__name__)
 
-_VAGUE_PATTERNS = re.compile(
-    r"\b(improv|handl|prevent|protect|manag|setup|configur|"
-    r"workflow|ceremon|practice|strateg|overview|timeline|recent|"
-    r"chang)\w*\b",
-    re.IGNORECASE,
+_SPECIFIC_TERMS = re.compile(
+    r"\b[A-Z][A-Za-z0-9]{2,}(?:-[A-Za-z0-9]+)*\b"  # proper nouns / tech terms
 )
 
 _EXPANSION_PROMPT = """You expand vague search queries into specific terms for a knowledge base.
@@ -43,13 +40,19 @@ Terms:"""
 
 
 def should_expand(query: str) -> bool:
-    """Detect if a query is vague/abstract enough to benefit from expansion."""
+    """Detect if a query would benefit from LLM expansion.
+
+    Expands most queries EXCEPT those with 2+ specific technical terms
+    (proper nouns like JWT, Redis, Okta) which already have strong
+    lexical signal for BM25.
+    """
     words = query.split()
     if len(words) <= 2:
         return True
-    if _VAGUE_PATTERNS.search(query):
-        return True
-    return False
+    # If query has 2+ specific technical terms, skip expansion
+    if len(_SPECIFIC_TERMS.findall(query)) >= 2:
+        return False
+    return True
 
 
 async def expand_query(query: str) -> str | None:
