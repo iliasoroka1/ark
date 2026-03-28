@@ -6,6 +6,7 @@ import logging
 from collections import defaultdict
 from datetime import UTC, datetime
 
+import numpy as np
 import tantivy
 
 from ark.engine.result import Error, Ok, Result
@@ -27,6 +28,47 @@ _DECAY_FLOOR = 0.3
 _DECAY_HALFLIFE = 365.0
 _ACCESS_BOOST_CAP = 1.3
 _ACCESS_BOOST_STEP = 0.02
+
+
+def _expand_query_tokens(tokens: list[str]) -> list[str]:
+    """Expand query tokens with morphological variants (light stemming)."""
+    expanded = list(tokens)
+    seen = set(tokens)
+    for tok in tokens:
+        variants = []
+        # Plural stripping
+        if tok.endswith("ies") and len(tok) > 4:
+            variants.append(tok[:-3] + "y")
+        elif tok.endswith("ses") or tok.endswith("xes") or tok.endswith("zes"):
+            variants.append(tok[:-2])
+        elif tok.endswith("shes") or tok.endswith("ches"):
+            variants.append(tok[:-2])
+        elif tok.endswith("s") and not tok.endswith("ss") and len(tok) > 3:
+            variants.append(tok[:-1])
+        # -ing removal
+        if tok.endswith("ing") and len(tok) > 5:
+            variants.append(tok[:-3])
+            variants.append(tok[:-3] + "e")
+        # -ed removal
+        if tok.endswith("ed") and len(tok) > 4:
+            variants.append(tok[:-2])
+            variants.append(tok[:-1])
+            if tok.endswith("ied"):
+                variants.append(tok[:-3] + "y")
+        # -tion/-ment
+        if tok.endswith("tion") and len(tok) > 5:
+            variants.append(tok[:-4] + "te")
+            variants.append(tok[:-4])
+        if tok.endswith("ment") and len(tok) > 5:
+            variants.append(tok[:-4])
+        # Add singular→plural
+        if not tok.endswith("s") and len(tok) > 2:
+            variants.append(tok + "s")
+        for v in variants:
+            if v not in seen:
+                seen.add(v)
+                expanded.append(v)
+    return expanded
 
 
 class Searcher:
@@ -57,9 +99,11 @@ class Searcher:
         self._index.reload()
         searcher = self._index.searcher()
 
+        query_vec = None
         match await self._embedding.embed(query):
-            case Ok(query_vec):
-                embed_query = self._build_embedding_query(query_vec)
+            case Ok(qv):
+                query_vec = qv
+                embed_query = self._build_embedding_query(qv)
                 if corpus or source_ids:
                     embed_query = self._wrap_filters(embed_query, corpus, source_ids)
                 embed_results = searcher.search(embed_query, limit=params.num_to_score)
@@ -69,7 +113,8 @@ class Searcher:
 
         bm25_tokens = tokenize_text(query)
         if bm25_tokens:
-            bm25_query = self._build_bm25_query(bm25_tokens)
+            expanded = _expand_query_tokens(bm25_tokens)
+            bm25_query = self._build_bm25_query(expanded)
             if corpus or source_ids:
                 bm25_query = self._wrap_filters(bm25_query, corpus, source_ids)
             bm25_results = searcher.search(bm25_query, limit=params.num_to_score)
@@ -77,7 +122,8 @@ class Searcher:
         else:
             bm25_docs = []
 
-        hits = _rrf_merge(embed_docs, bm25_docs, params, self._embed_cache)
+        hits = _rrf_merge(embed_docs, bm25_docs, params, self._embed_cache,
+                          query_vec=query_vec)
         return Ok(hits)
 
     def _build_embedding_query(self, embedding: list[float]) -> tantivy.Query:
@@ -111,6 +157,7 @@ class Searcher:
         return tantivy.Query.boolean_query(clauses)
 
 
+
 def _doc_field(doc, field):
     vals = doc.get_all(field)
     return str(vals[0]) if vals else None
@@ -139,7 +186,7 @@ def _compute_decay(access_count, last_accessed):
     return decay * access_boost
 
 
-def _rrf_merge(embed_docs, bm25_docs, params, embed_cache=None):
+def _rrf_merge(embed_docs, bm25_docs, params, embed_cache=None, query_vec=None):
     scored = {}
     for rank, (raw_score, doc) in enumerate(embed_docs):
         cid = _doc_field(doc, F_CHUNK_ID)
@@ -159,6 +206,10 @@ def _rrf_merge(embed_docs, bm25_docs, params, embed_cache=None):
             scored[cid] = (merged, scored[cid][1])
         else:
             scored[cid] = (SearchScores(rrf=rrf, embedding=0.0, bm25=raw_score), doc)
+
+    # Filter stale entries and apply cosine re-ranking
+    if embed_cache is not None:
+        _filter_and_rerank(scored, embed_cache, query_vec)
 
     decay_map = {}
     if embed_cache is not None:
@@ -196,3 +247,23 @@ def _rrf_merge(embed_docs, bm25_docs, params, embed_cache=None):
             break
 
     return hits
+
+
+def _filter_and_rerank(scored, embed_cache, query_vec):
+    """Remove stale entries (orphaned documents without cached embeddings)."""
+    doc_id_map = {}
+    for cid, (scores, doc) in scored.items():
+        did = _doc_field(doc, F_ID) or ""
+        if did:
+            doc_id_map.setdefault(did, []).append(cid)
+
+    if not doc_id_map:
+        return
+
+    vecs = embed_cache.get_many(list(doc_id_map.keys()))
+
+    # Remove stale entries (no cached embedding = orphaned/duplicate)
+    for did, cids in doc_id_map.items():
+        if did not in vecs:
+            for cid in cids:
+                scored.pop(cid, None)
