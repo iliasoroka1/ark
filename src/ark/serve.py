@@ -17,7 +17,7 @@ from ark.engine.index import Indexer
 from ark.engine.search import Searcher
 from ark.engine.graph_store import GraphStore
 from ark.engine.circuit_breaker import CircuitBreakerEmbedding
-from ark.engine.types import IndexDoc, SearchParams, NodeType
+from ark.engine.types import IndexDoc, SearchHit, SearchParams, SearchScores, NodeType
 from ark.engine.graph import graph_search
 from ark.engine.result import Ok
 
@@ -117,13 +117,27 @@ class ArkServer:
                             )
                             # Merge graph neighbors into results
                             seen = {h.doc_id for h in hits}
-                            extra_ids = [n.doc_id for n in gr.neighbors if n.doc_id not in seen]
-                            _ = extra_ids  # available for future enrichment
+                            for n in gr.neighbors:
+                                if n.doc_id not in seen:
+                                    seen.add(n.doc_id)
+                                    # Fetch content from embedding cache
+                                    content = n.l0 or ""
+                                    hits.append(SearchHit(
+                                        doc_id=n.doc_id,
+                                        chunk_id=n.doc_id,
+                                        body=content,
+                                        scores=SearchScores(rrf=n.score * 0.5, embedding=n.score, bm25=0.0),
+                                        node_type=None,
+                                        attributes=None,
+                                        chunk_attributes=None,
+                                    ))
+                            # Re-sort by RRF score after adding neighbors
+                            hits.sort(key=lambda h: h.scores.rrf, reverse=True)
                         case _:
                             pass  # proceed without graph enhancement
 
                     results = []
-                    for h in hits:
+                    for h in hits[:limit]:
                         entry: dict = {
                             "id": h.doc_id,
                             "content": h.body,

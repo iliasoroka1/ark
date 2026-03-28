@@ -29,37 +29,37 @@ class TestQuery:
 # ── Ground-truth document IDs (from ark search) ──
 
 # Auth memories
-AUTH_JWT_24H = "7d0bca77d6aae0a2"       # JWT tokens with 24-hour expiry
-AUTH_LOGIN_BUG = "fa23c59e0072d1e1"     # login bug expired JWT refresh
-AUTH_SESSION = "3ce793d76cd38eaa"        # session mgmt refactored, stateless JWTs
-AUTH_MFA = "c8c3424bc410efd6"           # MFA enforcement rolled out
-AUTH_OAUTH = "f9f921a659be8aaa"         # migrated to OAuth 2.0 PKCE
-AUTH_SSO = "01e5c6fa83305bc8"           # SSO integration with Okta
+AUTH_JWT_24H = "e5cbc506b705bf20"       # JWT tokens with 24-hour expiry
+AUTH_LOGIN_BUG = "5ebf4f751b53d0d7"     # login bug expired JWT refresh
+AUTH_SESSION = "e17c981595bb266a"        # session mgmt refactored, stateless JWTs
+AUTH_MFA = "ff2f93a81a68fc8c"           # MFA enforcement rolled out
+AUTH_OAUTH = "6520003b5e121630"         # migrated to OAuth 2
+AUTH_SSO = "9a0fa4d17f0fd207"           # SSO integration with Okta
 
 # Infra memories
-INFRA_RATELIMIT = "0cc63c7e0822d695"    # rate limiting token bucket 100 req/min
-INFRA_DATADOG = "eef3c42aca4bd10d"      # Datadog monitors payments-api
-INFRA_AUTOSCALE = "c03dea8ef4182cc6"    # auto-scaling recommendation-engine
-INFRA_CART = "961d45b3a241e921"         # deployed cart-service v2.3.1
-INFRA_REDIS = "df9bdfd4eac84e23"        # Redis cache catalog-service
+INFRA_RATELIMIT = "eb9a2f5d7a388697"    # rate limiting token bucket 100 req/min
+INFRA_DATADOG = "d13e7d62d65240ac"      # Datadog monitors payments-api
+INFRA_AUTOSCALE = "6fea38e8d09556fb"    # auto-scaling recommendation-engine
+INFRA_CART = "08a91aeffee0a5e1"         # deployed cart-service v2
+INFRA_REDIS = "b690f07b60f0257b"        # Redis cache catalog-service
 
 # DB memories
-DB_MATVIEW = "e72027dc1661d649"         # materialized view instead of 6-table join
-DB_MIGRATION = "78e9fee166a3640d"       # migration 047 audit log
-DB_INDEX = "72cbb27dba5288af"           # composite index orders table
-DB_REPLICATION = "3cdebbffc0b53404"     # PostgreSQL streaming replication
+DB_MATVIEW = "d5b1d205a0ff47c1"         # materialized view instead of 6-table join
+DB_MIGRATION = "79fa0b520862f106"       # migration 047 audit log
+DB_INDEX = "e2d12ca9459525ef"           # composite index orders table
+DB_REPLICATION = "c5409c65f311628a"     # PostgreSQL streaming replication
 
 # API memories
-API_VERSIONING = "3cae47bea69627cf"     # API versioning /api/v{N}
-API_ERRORS = "3f4050699ddb7055"         # error response format standardized
-API_PAGINATION = "f9f6fa734426d4c1"     # cursor-based pagination
-API_ENVOY = "38db5b3c761350e1"          # rate limiting via Envoy proxy
+API_VERSIONING = "913d26b10564c09a"     # API versioning /api/v{N}
+API_ERRORS = "dee0d1d453d7be80"         # error response format standardized
+API_PAGINATION = "2442efb11a5228cd"     # cursor-based pagination
+API_ENVOY = "beacc4ddd0cb061e"          # rate limiting via Envoy proxy
 
 # Process memories
-PROC_SPRINT = "8715f400cd17137e"        # sprint planning Tuesdays
-PROC_ONCALL = "a7bfacf4ce1a4232"        # on-call rotation weekly
-PROC_CODEREVIEW = "6a1aacd3f96e7cf3"    # code review policy 2 approvals
-PROC_INCIDENTS = "2c7c5fc8a3fdb4b7"     # incident postmortem payments outage SEV-1
+PROC_SPRINT = "d3fae1b223578479"        # sprint planning Tuesdays
+PROC_ONCALL = "14cddd8bb324a254"        # on-call rotation weekly
+PROC_CODEREVIEW = "c4658bd5ad47ab50"    # code review policy 2 approvals
+PROC_INCIDENTS = "592ec5175080e20f"     # incident postmortem payments outage SEV-1
 
 
 # ── Test queries covering all categories ──
@@ -157,15 +157,64 @@ def run_search(query: str) -> list[dict]:
         return []
     try:
         data = json.loads(result.stdout)
-        return data.get("results", data.get("result", []))
+        return extract_results(data)
     except json.JSONDecodeError:
         print(f"  ERROR parsing: '{query}': {result.stdout[:200]}")
         return []
 
 
+def extract_results(data: dict) -> list[dict]:
+    """Handle both response formats: {results: [...]} and {ok: true, result: [...]}."""
+    if "results" in data:
+        return data["results"]
+    result = data.get("result", [])
+    if isinstance(result, list):
+        return result
+    return []
+
+
+# Map ground-truth IDs to content fingerprints for dedup-safe matching.
+# When duplicate ingestion creates new IDs for the same content, we match
+# on a unique substring from the original memory instead of exact ID.
+_ID_FINGERPRINTS: dict[str, str] = {
+    "e5cbc506b705bf20": "jwt tokens with 24-hour expiry",
+    "5ebf4f751b53d0d7": "login bug was expired jwt",
+    "e17c981595bb266a": "switched from server-side sessions",
+    "ff2f93a81a68fc8c": "mfa enforcement rolled out",
+    "6520003b5e121630": "migrated to oauth 2",
+    "9a0fa4d17f0fd207": "sso integration with okta",
+    "eb9a2f5d7a388697": "token bucket algorithm, 100 req/min",
+    "d13e7d62d65240ac": "datadog monitors for payments-api",
+    "6fea38e8d09556fb": "auto-scaling config for recommendation",
+    "08a91aeffee0a5e1": "cart-service v2",
+    "b690f07b60f0257b": "redis cache layer added",
+    "d5b1d205a0ff47c1": "materialized view instead of 6-table",
+    "79fa0b520862f106": "migration 047_add_audit_log",
+    "e2d12ca9459525ef": "composite index on orders table",
+    "c5409c65f311628a": "postgresql streaming replication",
+    "913d26b10564c09a": "api versioning strategy",
+    "dee0d1d453d7be80": "error response format standardized",
+    "2442efb11a5228cd": "cursor-based using opaque base64",
+    "beacc4ddd0cb061e": "envoy proxy sidecar",
+    "d3fae1b223578479": "sprint planning moved to tuesdays",
+    "14cddd8bb324a254": "on-call rotation: weekly",
+    "c4658bd5ad47ab50": "code review policy updated",
+    "592ec5175080e20f": "incident postmortem for 2026-03-12",
+}
+
+
 def is_relevant(item: dict, tq: TestQuery) -> bool:
-    """Check if a result matches any expected ground-truth ID."""
-    return item.get("id", "") in tq.expected_ids
+    """Check if a result matches expected content, tolerating duplicate IDs."""
+    item_id = item.get("id", "")
+    if item_id in tq.expected_ids:
+        return True
+    # Fallback: match by content fingerprint for any expected ID
+    content = (item.get("l0", "") + " " + item.get("content", "")).lower()
+    for eid in tq.expected_ids:
+        fp = _ID_FINGERPRINTS.get(eid)
+        if fp and fp in content:
+            return True
+    return False
 
 
 def dcg(relevances: list[int], k: int) -> float:
