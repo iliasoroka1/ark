@@ -59,24 +59,15 @@ class Searcher:
         corpus: str | None = None,
         source_ids: list[str] | None = None,
         params: SearchParams | None = None,
+        expanded_query: str | None = None,
     ) -> Result[list[SearchHit], SearchErr]:
         if params is None:
             params = SearchParams()
 
-        # ── Query expansion for vague/abstract queries ──
-        from ark.engine.query_expand import expand_query, should_expand
-        search_query = query
-        expanded_bm25_query = None
-        if should_expand(query):
-            expanded = await expand_query(query)
-            if expanded:
-                expanded_bm25_query = expanded  # Use expanded terms for BM25
-                log.debug(f"Query expanded: '{query}' → '{expanded}'")
-
         query_vec = None
 
         # ── Signal 1: Full-precision cosine via embedding cache ──
-        # Use ORIGINAL query for embedding (LLM expansion is for BM25 keyword matching)
+        # Always uses the ORIGINAL query embedding (not expanded)
         cosine_results: list[tuple[str, float]] = []
         match await self._embedding.embed(query):
             case Ok(qv):
@@ -88,22 +79,31 @@ class Searcher:
             case Error(err):
                 pass
 
-        # ── Signal 2: BM25 via tantivy ──
+        # ── Signal 2: BM25 via tantivy (original query, full weight) ──
         self._index.reload()
         searcher = self._index.searcher()
 
         bm25_docs: list[tuple[float, object]] = []
-        bm25_text = expanded_bm25_query or query
-        if bm25_text.strip():
-            bm25_query, _errors = self._index.parse_query_lenient(bm25_text, [F_CHUNK_BODY])
+        if query.strip():
+            bm25_query, _errors = self._index.parse_query_lenient(query, [F_CHUNK_BODY])
             if corpus or source_ids:
                 bm25_query = self._wrap_filters(bm25_query, corpus, source_ids)
             bm25_results = searcher.search(bm25_query, limit=params.num_to_score)
             bm25_docs = [(score, searcher.doc(addr)) for score, addr in bm25_results.hits]
 
+        # ── Signal 2b: BM25 on LLM-expanded query (half weight) ──
+        bm25_expanded_docs: list[tuple[float, object]] = []
+        if expanded_query and expanded_query.strip() and expanded_query != query:
+            exp_query, _errors = self._index.parse_query_lenient(expanded_query, [F_CHUNK_BODY])
+            if corpus or source_ids:
+                exp_query = self._wrap_filters(exp_query, corpus, source_ids)
+            exp_results = searcher.search(exp_query, limit=params.num_to_score)
+            bm25_expanded_docs = [(score, searcher.doc(addr)) for score, addr in exp_results.hits]
+
         # ── Merge: RRF with score-weighted BM25 ──
         hits = _rrf_merge(cosine_results, bm25_docs, searcher, self._schema,
-                          params, self._embed_cache)
+                          params, self._embed_cache,
+                          bm25_expanded_docs=bm25_expanded_docs)
 
         # ── Graph expansion ──
         if self._graph_store is not None and self._embed_cache is not None and query_vec is not None:
@@ -158,13 +158,17 @@ def _compute_decay(access_count, last_accessed):
     return decay * access_boost
 
 
-def _rrf_merge(cosine_results, bm25_docs, searcher, schema, params, embed_cache=None):
+_EXPANDED_BM25_WEIGHT = 0.5  # weight multiplier for LLM-expanded BM25 terms
+
+
+def _rrf_merge(cosine_results, bm25_docs, searcher, schema, params, embed_cache=None,
+               bm25_expanded_docs=None):
     """Merge full-precision cosine results with BM25 results via score-weighted RRF.
 
     cosine_results: list of (doc_id, cosine_similarity) from embedding cache
     bm25_docs: list of (bm25_score, tantivy_doc) from tantivy search
+    bm25_expanded_docs: optional list of (bm25_score, tantivy_doc) from expanded query (half weight)
     """
-    # Build scored dict keyed by doc_id (not chunk_id) for cosine results
     scored: dict[str, tuple[SearchScores, float]] = {}  # doc_id → (scores, cosine_sim)
 
     for rank, (doc_id, cosine_sim) in enumerate(cosine_results):
@@ -198,6 +202,30 @@ def _rrf_merge(cosine_results, bm25_docs, searcher, schema, params, embed_cache=
             scored[doc_id] = (merged, cosine_sim)
         else:
             scored[doc_id] = (SearchScores(rrf=bm25_rrf, embedding=0.0, bm25=raw_bm25), 0.0)
+
+    # Merge expanded BM25 at reduced weight (vocabulary bridging without noise dominance)
+    if bm25_expanded_docs:
+        max_exp = bm25_expanded_docs[0][0] if bm25_expanded_docs else 1.0
+        if max_exp < 1e-6:
+            max_exp = 1.0
+        exp_weight = _BM25_WEIGHT * _EXPANDED_BM25_WEIGHT
+        seen_exp: set[str] = set()
+        for rank, (raw_score, doc) in enumerate(bm25_expanded_docs):
+            doc_id = _doc_field(doc, F_ID) or ""
+            if not doc_id or doc_id in seen_exp:
+                continue
+            seen_exp.add(doc_id)
+            rank_rrf = exp_weight / (_RRF_K + rank + 1)
+            score_factor = raw_score / max_exp
+            rrf = rank_rrf * score_factor
+            if doc_id in scored:
+                existing, cosine_sim = scored[doc_id]
+                scored[doc_id] = (
+                    SearchScores(rrf=existing.rrf + rrf, embedding=existing.embedding, bm25=existing.bm25),
+                    cosine_sim,
+                )
+            else:
+                scored[doc_id] = (SearchScores(rrf=rrf, embedding=0.0, bm25=raw_score), 0.0)
 
     # Apply decay
     if embed_cache is not None:
