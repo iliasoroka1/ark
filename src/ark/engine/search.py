@@ -23,7 +23,9 @@ log = logging.getLogger(__name__)
 
 _RRF_K = 15.0
 _EMBED_WEIGHT = 2.0
-_BM25_WEIGHT = 0.5
+_BM25_WEIGHT = 1.5
+_GRAPH_HOPS = 2
+_GRAPH_MIN_SIM = 0.55
 _DECAY_FLOOR = 0.3
 _DECAY_HALFLIFE = 365.0
 _ACCESS_BOOST_CAP = 1.3
@@ -31,8 +33,22 @@ _ACCESS_BOOST_STEP = 0.02
 _COSINE_BLEND = 0.25  # weight of full-precision cosine in final score
 
 
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "it", "that", "this", "was", "are",
+    "be", "has", "had", "have", "do", "does", "did", "not", "no", "so",
+    "if", "as", "we", "how", "what", "when", "where", "who", "which",
+    "our", "my", "your", "their", "its", "can", "will", "would", "should",
+    "could", "may", "up", "out", "all", "just", "also", "than", "then",
+    "into", "about", "after", "before", "between", "each", "more", "some",
+    "such", "any", "been", "being", "were", "they",
+})
+
+
 def _expand_query_tokens(tokens: list[str]) -> list[str]:
-    """Expand query tokens with morphological variants (light stemming)."""
+    """Expand query tokens with morphological variants (light stemming).
+    Filters stop words to prevent noisy BM25 matches on 'and', 'the', etc."""
+    tokens = [t for t in tokens if t not in _STOP_WORDS]
     expanded = list(tokens)
     seen = set(tokens)
     for tok in tokens:
@@ -62,9 +78,7 @@ def _expand_query_tokens(tokens: list[str]) -> list[str]:
             variants.append(tok[:-4])
         if tok.endswith("ment") and len(tok) > 5:
             variants.append(tok[:-4])
-        # Add singular→plural
-        if not tok.endswith("s") and len(tok) > 2:
-            variants.append(tok + "s")
+        # NOTE: Do NOT add singular→plural ("prevent"→"prevents" matches noise)
         for v in variants:
             if v not in seen:
                 seen.add(v)
@@ -73,7 +87,7 @@ def _expand_query_tokens(tokens: list[str]) -> list[str]:
 
 
 class Searcher:
-    __slots__ = ("_schema", "_index", "_embedding", "_embed_cache")
+    __slots__ = ("_schema", "_index", "_embedding", "_embed_cache", "_graph_store")
 
     def __init__(
         self,
@@ -81,11 +95,13 @@ class Searcher:
         index: tantivy.Index,
         embedding: Embedding,
         embed_cache: EmbeddingCache | None = None,
+        graph_store=None,
     ) -> None:
         self._schema = schema
         self._index = index
         self._embedding = embedding
         self._embed_cache = embed_cache
+        self._graph_store = graph_store
 
     async def search(
         self,
@@ -125,6 +141,11 @@ class Searcher:
 
         hits = _rrf_merge(embed_docs, bm25_docs, params, self._embed_cache,
                           query_vec=query_vec)
+
+        # Graph expansion: traverse edges from top results to find related docs
+        if self._graph_store is not None and self._embed_cache is not None and query_vec is not None:
+            hits = _graph_expand(hits, query_vec, self._graph_store, self._embed_cache, params)
+
         return Ok(hits)
 
     def _build_embedding_query(self, embedding: list[float]) -> tantivy.Query:
@@ -195,11 +216,19 @@ def _rrf_merge(embed_docs, bm25_docs, params, embed_cache=None, query_vec=None):
         rrf = _EMBED_WEIGHT / (_RRF_K + rank + 1)
         scored[cid] = (SearchScores(rrf=rrf, embedding=raw_score, bm25=0.0), doc)
 
+    # Score-weighted BM25: preserve raw score magnitude in RRF contribution.
+    # A doc matching "bug" (score=4.0) gets much more weight than one matching "and" (score=1.6).
+    max_bm25 = bm25_docs[0][0] if bm25_docs else 1.0
+    if max_bm25 < 1e-6:
+        max_bm25 = 1.0
+
     for rank, (raw_score, doc) in enumerate(bm25_docs):
         cid = _doc_field(doc, F_CHUNK_ID)
         if not cid:
             continue
-        rrf = _BM25_WEIGHT / (_RRF_K + rank + 1)
+        rank_rrf = _BM25_WEIGHT / (_RRF_K + rank + 1)
+        score_factor = raw_score / max_bm25
+        rrf = rank_rrf * score_factor  # strong matches get full weight
         if cid in scored:
             existing = scored[cid][0]
             merged = SearchScores(rrf=existing.rrf + rrf, embedding=existing.embedding, bm25=raw_score)
@@ -294,3 +323,63 @@ def _filter_stale_and_cosine_rerank(scored, embed_cache, query_vec):
                     scored[cid] = (SearchScores(rrf=blended, embedding=old.embedding, bm25=old.bm25), doc)
     except Exception:
         pass  # graceful fallback if numpy ops fail
+
+
+def _graph_expand(hits, query_vec, graph_store, embed_cache, params):
+    """Expand results by traversing graph edges from top hits."""
+    if not hits:
+        return hits
+
+    qv = np.array(query_vec, dtype=np.float32)
+    qv_norm = np.linalg.norm(qv)
+    if qv_norm < 1e-12:
+        return hits
+    qv = qv / qv_norm
+
+    existing_ids = {h.doc_id for h in hits}
+    seed_ids = [h.doc_id for h in hits[:5]]
+
+    candidate_ids: set[str] = set()
+    frontier = set(seed_ids)
+    visited = set(seed_ids)
+    for _hop in range(_GRAPH_HOPS):
+        next_frontier: set[str] = set()
+        for doc_id in frontier:
+            for neighbor_id, _etype, _weight in graph_store.get_neighbors(doc_id, limit=8):
+                if neighbor_id not in visited:
+                    visited.add(neighbor_id)
+                    next_frontier.add(neighbor_id)
+                    if neighbor_id not in existing_ids:
+                        candidate_ids.add(neighbor_id)
+            for pred_id, _etype, _weight in graph_store.get_predecessors(doc_id, limit=8):
+                if pred_id not in visited:
+                    visited.add(pred_id)
+                    next_frontier.add(pred_id)
+                    if pred_id not in existing_ids:
+                        candidate_ids.add(pred_id)
+        frontier = next_frontier
+
+    if not candidate_ids:
+        return hits
+
+    vecs = embed_cache.get_many(list(candidate_ids))
+    min_rrf = hits[-1].scores.rrf if hits else 0.01
+    max_rrf = hits[0].scores.rrf if hits else 0.1
+
+    for doc_id, vec in vecs.items():
+        nv = np.array(vec, dtype=np.float32)
+        nv_norm = np.linalg.norm(nv)
+        if nv_norm < 1e-12:
+            continue
+        nv = nv / nv_norm
+        sim = float(np.dot(qv, nv))
+        if sim >= _GRAPH_MIN_SIM:
+            rrf_score = min_rrf + (max_rrf - min_rrf) * max(0, (sim - _GRAPH_MIN_SIM) / (1.0 - _GRAPH_MIN_SIM))
+            scores = SearchScores(rrf=rrf_score, embedding=sim, bm25=0.0)
+            hits.append(SearchHit(
+                doc_id=doc_id, chunk_id=f"{doc_id}-graph", body="",
+                scores=scores, attributes=None, chunk_attributes=None,
+            ))
+
+    hits.sort(key=lambda h: h.scores.rrf, reverse=True)
+    return hits[:params.num_to_return]

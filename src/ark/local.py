@@ -52,6 +52,7 @@ def _ensure_init() -> None:
         index=_indexer.index,
         embedding=cb_embedding,
         embed_cache=_indexer.embed_cache,
+        graph_store=_graph_store,
     )
     _initialized = True
 
