@@ -120,7 +120,7 @@ async def _mem_search(query: str) -> dict:
     from ark.engine.result import Ok
     from ark.engine.types import SearchParams
 
-    params = SearchParams(num_to_return=10, num_to_score=30, min_rrf_score=0.005, max_hits_per_doc=1)
+    params = SearchParams(num_to_return=10, num_to_score=120, min_rrf_score=0.005, max_hits_per_doc=1)
     corpus = "agent:ark-local"
 
     match await _searcher.search(query, corpus=corpus, params=params):
