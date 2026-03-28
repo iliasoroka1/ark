@@ -15,6 +15,7 @@ from ark.engine.index import (
     F_ATTRIBUTES, F_CHUNK_ATTRIBUTES, F_CHUNK_ID,
     F_CHUNK_TOKENS, F_CORPUS, F_ID, F_SOURCE_ID,
 )
+from ark.engine.query_expand import expand_query
 from ark.engine.tokenizer import binarize_embedding, tokenize_text
 from ark.engine.types import SearchErr, SearchHit, SearchParams, SearchScores
 
@@ -52,28 +53,43 @@ class Searcher:
         if params is None:
             params = SearchParams()
 
+        queries = expand_query(query)
+
         self._index.reload()
         searcher = self._index.searcher()
 
-        match await self._embedding.embed(query):
-            case Ok(query_vec):
-                embed_query = self._build_embedding_query(query_vec)
-                if corpus or source_ids:
-                    embed_query = self._wrap_filters(embed_query, corpus, source_ids)
-                embed_results = searcher.search(embed_query, limit=params.num_to_score)
-                embed_docs = [(score, searcher.doc(addr)) for score, addr in embed_results.hits]
-            case Error(err):
-                embed_docs = []
+        # Collect embed + BM25 docs from all expanded queries
+        all_embed_docs: list[tuple[float, object]] = []
+        all_bm25_docs: list[tuple[float, object]] = []
 
-        bm25_tokens = tokenize_text(query)
-        if bm25_tokens:
-            bm25_query = self._build_bm25_query(bm25_tokens)
-            if corpus or source_ids:
-                bm25_query = self._wrap_filters(bm25_query, corpus, source_ids)
-            bm25_results = searcher.search(bm25_query, limit=params.num_to_score)
-            bm25_docs = [(score, searcher.doc(addr)) for score, addr in bm25_results.hits]
-        else:
-            bm25_docs = []
+        for q in queries:
+            match await self._embedding.embed(q):
+                case Ok(query_vec):
+                    embed_query = self._build_embedding_query(query_vec)
+                    if corpus or source_ids:
+                        embed_query = self._wrap_filters(embed_query, corpus, source_ids)
+                    embed_results = searcher.search(embed_query, limit=params.num_to_score)
+                    embed_docs = [(score, searcher.doc(addr)) for score, addr in embed_results.hits]
+                    all_embed_docs.extend(embed_docs)
+                case Error(err):
+                    pass
+
+            bm25_tokens = tokenize_text(q)
+            if bm25_tokens:
+                bm25_query = self._build_bm25_query(bm25_tokens)
+                if corpus or source_ids:
+                    bm25_query = self._wrap_filters(bm25_query, corpus, source_ids)
+                bm25_results = searcher.search(bm25_query, limit=params.num_to_score)
+                bm25_docs = [(score, searcher.doc(addr)) for score, addr in bm25_results.hits]
+                all_bm25_docs.extend(bm25_docs)
+
+        # Sort by score descending so RRF ranks give priority to highest-scoring
+        all_embed_docs.sort(key=lambda x: x[0], reverse=True)
+        all_bm25_docs.sort(key=lambda x: x[0], reverse=True)
+
+        # Deduplicate by chunk_id, keeping highest score
+        embed_docs = _dedup_docs(all_embed_docs)
+        bm25_docs = _dedup_docs(all_bm25_docs)
 
         hits = _rrf_merge(embed_docs, bm25_docs, params, self._embed_cache)
         return Ok(hits)
@@ -107,6 +123,18 @@ class Searcher:
             sid_q = tantivy.Query.boolean_query(sid_subqs)
             clauses.append((tantivy.Occur.Must, tantivy.Query.const_score_query(sid_q, score=0.0)))
         return tantivy.Query.boolean_query(clauses)
+
+
+def _dedup_docs(docs: list[tuple[float, object]]) -> list[tuple[float, object]]:
+    """Deduplicate docs by chunk_id, keeping the highest-scoring entry."""
+    seen: dict[str, int] = {}
+    result: list[tuple[float, object]] = []
+    for score, doc in docs:
+        cid = _doc_field(doc, F_CHUNK_ID)
+        if cid and cid not in seen:
+            seen[cid] = len(result)
+            result.append((score, doc))
+    return result
 
 
 def _doc_field(doc, field):

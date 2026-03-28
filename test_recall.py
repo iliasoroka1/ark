@@ -33,14 +33,14 @@ AUTH_JWT_24H = "7d0bca77d6aae0a2"       # JWT tokens with 24-hour expiry
 AUTH_LOGIN_BUG = "fa23c59e0072d1e1"     # login bug expired JWT refresh
 AUTH_SESSION = "3ce793d76cd38eaa"        # session mgmt refactored, stateless JWTs
 AUTH_MFA = "c8c3424bc410efd6"           # MFA enforcement rolled out
-AUTH_OAUTH = "f9f921a659be8aaa"         # migrated to OAuth 2.0 PKCE
+AUTH_OAUTH = "f9f921a659be8aaa"         # migrated to OAuth 2
 AUTH_SSO = "01e5c6fa83305bc8"           # SSO integration with Okta
 
 # Infra memories
 INFRA_RATELIMIT = "0cc63c7e0822d695"    # rate limiting token bucket 100 req/min
 INFRA_DATADOG = "eef3c42aca4bd10d"      # Datadog monitors payments-api
 INFRA_AUTOSCALE = "c03dea8ef4182cc6"    # auto-scaling recommendation-engine
-INFRA_CART = "961d45b3a241e921"         # deployed cart-service v2.3.1
+INFRA_CART = "961d45b3a241e921"         # deployed cart-service v2
 INFRA_REDIS = "df9bdfd4eac84e23"        # Redis cache catalog-service
 
 # DB memories
@@ -157,7 +157,7 @@ def run_search(query: str) -> list[dict]:
         return []
     try:
         data = json.loads(result.stdout)
-        return data.get("results", data.get("result", []))
+        return data.get("result", [])
     except json.JSONDecodeError:
         print(f"  ERROR parsing: '{query}': {result.stdout[:200]}")
         return []
