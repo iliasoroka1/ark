@@ -52,10 +52,16 @@ class FastEmbedProvider:
         from fastembed import TextEmbedding
 
         self._model = TextEmbedding(model_name=model_name)
-        # Nomic models use task prefixes for better retrieval
+        # Retrieval models use task prefixes for asymmetric search
         if "nomic" in model_name.lower():
             self._query_prefix = "search_query: "
             self._doc_prefix = "search_document: "
+        elif "bge" in model_name.lower():
+            self._query_prefix = "Represent this sentence for searching relevant passages: "
+            self._doc_prefix = ""
+        elif "e5" in model_name.lower():
+            self._query_prefix = "query: "
+            self._doc_prefix = "passage: "
         else:
             self._query_prefix = ""
             self._doc_prefix = ""

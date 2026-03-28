@@ -38,7 +38,7 @@ ENGINEERING = [
 
 
 async def main():
-    ark_home = os.path.expanduser("~/.ark")
+    ark_home = os.environ.get("ARK_HOME", os.path.expanduser("~/.ark"))
     memory_dir = os.path.join(ark_home, "memory")
 
     # Clear old data — tantivy index, embedding cache, and graph

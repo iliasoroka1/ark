@@ -76,7 +76,8 @@ def _make_embedding():
 
     try:
         from ark.engine.embed import FastEmbedProvider
-        return FastEmbedProvider()
+        fastembed_model = os.environ.get("FASTEMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+        return FastEmbedProvider(model_name=fastembed_model)
     except ImportError:
         pass
 
