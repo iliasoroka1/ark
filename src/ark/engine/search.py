@@ -63,10 +63,21 @@ class Searcher:
         if params is None:
             params = SearchParams()
 
+        # ── Query expansion for vague/abstract queries ──
+        from ark.engine.query_expand import expand_query, should_expand
+        search_query = query
+        expanded_bm25_query = None
+        if should_expand(query):
+            expanded = await expand_query(query)
+            if expanded:
+                expanded_bm25_query = expanded  # Use expanded terms for BM25
+                log.debug(f"Query expanded: '{query}' → '{expanded}'")
+
         query_vec = None
 
         # ── Signal 1: Full-precision cosine via embedding cache ──
-        cosine_results: list[tuple[str, float]] = []  # (doc_id, cosine_sim)
+        # Use ORIGINAL query for embedding (LLM expansion is for BM25 keyword matching)
+        cosine_results: list[tuple[str, float]] = []
         match await self._embedding.embed(query):
             case Ok(qv):
                 query_vec = qv
@@ -82,10 +93,9 @@ class Searcher:
         searcher = self._index.searcher()
 
         bm25_docs: list[tuple[float, object]] = []
-        if query.strip():
-            # Use tantivy's en_stem QueryParser for native stemming.
-            # parse_query_lenient handles colons (field:value syntax) and apostrophes gracefully.
-            bm25_query, _errors = self._index.parse_query_lenient(query, [F_CHUNK_BODY])
+        bm25_text = expanded_bm25_query or query
+        if bm25_text.strip():
+            bm25_query, _errors = self._index.parse_query_lenient(bm25_text, [F_CHUNK_BODY])
             if corpus or source_ids:
                 bm25_query = self._wrap_filters(bm25_query, corpus, source_ids)
             bm25_results = searcher.search(bm25_query, limit=params.num_to_score)
