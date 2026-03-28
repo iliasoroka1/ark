@@ -209,7 +209,7 @@ ALL_QUERIES = EXACT + PARAPHRASE + TANGENTIAL + ADVERSARIAL + NEGATIVE + MULTIHO
 def run_search(query: str) -> list[dict]:
     result = subprocess.run(
         ["uv", "run", "ark", "search", query],
-        capture_output=True, text=True, cwd="/Users/iliasoroka/ark"
+        capture_output=True, text=True, cwd="/tmp/ark-charlie"
     )
     if result.returncode != 0:
         return []
