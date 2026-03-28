@@ -10,6 +10,22 @@ from semantic_text_splitter import MarkdownSplitter, TextSplitter
 
 _WORD_RE = re.compile(r"\w+")
 
+# Common English stopwords that add noise to BM25 without improving recall
+_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "shall", "can", "to", "of", "in", "for",
+    "on", "with", "at", "by", "from", "as", "into", "through", "during",
+    "before", "after", "above", "below", "between", "out", "off", "over",
+    "under", "again", "further", "then", "once", "here", "there", "when",
+    "where", "why", "how", "all", "each", "every", "both", "few", "more",
+    "most", "other", "some", "such", "no", "nor", "not", "only", "own",
+    "same", "so", "than", "too", "very", "just", "because", "but", "and",
+    "or", "if", "while", "about", "up", "it", "its", "he", "she", "they",
+    "we", "you", "i", "me", "my", "our", "your", "his", "her", "their",
+    "this", "that", "these", "those", "what", "which", "who", "whom",
+})
+
 _MAX_DIMS = 4096
 _EMB_ONE: list[str] = [f"embedding_one_{i}" for i in range(_MAX_DIMS)]
 _EMB_ZERO: list[str] = [f"embedding_zero_{i}" for i in range(_MAX_DIMS)]
@@ -20,10 +36,38 @@ def binarize_embedding(embedding: list[float]) -> list[str]:
     return [one[i] if v > 0.0 else zero[i] for i, v in enumerate(embedding)]
 
 
-def tokenize_text(text: str, max_len: int = 64) -> list[str]:
-    return [
-        m.group().lower() for m in _WORD_RE.finditer(text) if len(m.group()) <= max_len
-    ]
+def _stem(word: str) -> str | None:
+    """Simple English suffix stemmer. Returns stem if different from input, else None."""
+    if len(word) <= 3:
+        return None
+    # Order matters: try longer suffixes first
+    for suffix, min_stem in [
+        ("ies", 3), ("ied", 3),  # carries→carri, tried→tri
+        ("ing", 3), ("tion", 3), ("ment", 3), ("ness", 3),
+        ("ous", 3), ("ive", 3), ("ful", 3), ("less", 3),
+        ("able", 3), ("ible", 3),
+        ("es", 3), ("ed", 3), ("er", 3), ("ly", 3),
+        ("s", 3),
+    ]:
+        if word.endswith(suffix) and len(word) - len(suffix) >= min_stem:
+            return word[:-len(suffix)]
+    return None
+
+
+def tokenize_text(text: str, max_len: int = 64, remove_stopwords: bool = False) -> list[str]:
+    tokens = []
+    for m in _WORD_RE.finditer(text):
+        w = m.group()
+        if len(w) > max_len:
+            continue
+        low = w.lower()
+        if remove_stopwords and low in _STOPWORDS:
+            continue
+        tokens.append(low)
+        stem = _stem(low)
+        if stem and stem != low:
+            tokens.append(stem)
+    return tokens
 
 
 @runtime_checkable
