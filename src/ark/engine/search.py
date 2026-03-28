@@ -67,7 +67,7 @@ class Searcher:
         query_vec = None
 
         # ── Signal 1: Full-precision cosine via embedding cache ──
-        # Always uses the ORIGINAL query embedding (not expanded)
+        # Embeds original query + expanded query (if provided), merges by max sim.
         cosine_results: list[tuple[str, float]] = []
         match await self._embedding.embed(query):
             case Ok(qv):
@@ -78,6 +78,26 @@ class Searcher:
                     )
             case Error(err):
                 pass
+
+        # Multi-query cosine: embed the original query combined with a concise
+        # semantic summary (not raw synonym terms) and merge results.
+        # Only for vague queries where the expanded terms are available.
+        if expanded_query and expanded_query != query and self._embed_cache is not None:
+            # Embed "original query + expanded" as a single enriched query
+            enriched = f"{query} {expanded_query}"
+            match await self._embedding.embed(enriched):
+                case Ok(enr_vec):
+                    enr_cosine = self._embed_cache.search_by_vector(
+                        enr_vec, corpus or "", limit=params.num_to_score,
+                    )
+                    # Merge: keep max cosine sim per doc
+                    existing = dict(cosine_results)
+                    for doc_id, sim in enr_cosine:
+                        if doc_id not in existing or sim > existing[doc_id]:
+                            existing[doc_id] = sim
+                    cosine_results = sorted(existing.items(), key=lambda x: x[1], reverse=True)
+                case Error(_):
+                    pass
 
         # ── Signal 2: BM25 via tantivy (original query, full weight) ──
         self._index.reload()
