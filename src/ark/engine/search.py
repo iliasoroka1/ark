@@ -1,4 +1,8 @@
-"""Read side of the hybrid index. Embedding + BM25 search merged via RRF."""
+"""Read side of the hybrid index.
+
+Full-precision cosine (via embedding_cache) + BM25 (via tantivy) merged with
+score-weighted RRF, plus graph neighbor expansion.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +20,7 @@ from ark.engine.index import (
     F_ATTRIBUTES, F_CHUNK_ATTRIBUTES, F_CHUNK_ID,
     F_CHUNK_TOKENS, F_CORPUS, F_ID, F_SOURCE_ID,
 )
-from ark.engine.tokenizer import binarize_embedding, tokenize_text
+from ark.engine.tokenizer import tokenize_text
 from ark.engine.types import SearchErr, SearchHit, SearchParams, SearchScores
 
 log = logging.getLogger(__name__)
@@ -30,7 +34,6 @@ _DECAY_FLOOR = 0.3
 _DECAY_HALFLIFE = 365.0
 _ACCESS_BOOST_CAP = 1.3
 _ACCESS_BOOST_STEP = 0.02
-_COSINE_BLEND = 0.25  # weight of full-precision cosine in final score
 
 
 _STOP_WORDS = frozenset({
@@ -78,7 +81,6 @@ def _expand_query_tokens(tokens: list[str]) -> list[str]:
             variants.append(tok[:-4])
         if tok.endswith("ment") and len(tok) > 5:
             variants.append(tok[:-4])
-        # NOTE: Do NOT add singular→plural ("prevent"→"prevents" matches noise)
         for v in variants:
             if v not in seen:
                 seen.add(v)
@@ -113,22 +115,26 @@ class Searcher:
         if params is None:
             params = SearchParams()
 
-        self._index.reload()
-        searcher = self._index.searcher()
-
         query_vec = None
+
+        # ── Signal 1: Full-precision cosine via embedding cache ──
+        cosine_results: list[tuple[str, float]] = []  # (doc_id, cosine_sim)
         match await self._embedding.embed(query):
             case Ok(qv):
                 query_vec = qv
-                embed_query = self._build_embedding_query(qv)
-                if corpus or source_ids:
-                    embed_query = self._wrap_filters(embed_query, corpus, source_ids)
-                embed_results = searcher.search(embed_query, limit=params.num_to_score)
-                embed_docs = [(score, searcher.doc(addr)) for score, addr in embed_results.hits]
+                if self._embed_cache is not None:
+                    cosine_results = self._embed_cache.search_by_vector(
+                        qv, corpus or "", limit=params.num_to_score,
+                    )
             case Error(err):
-                embed_docs = []
+                pass
+
+        # ── Signal 2: BM25 via tantivy ──
+        self._index.reload()
+        searcher = self._index.searcher()
 
         bm25_tokens = tokenize_text(query)
+        bm25_docs: list[tuple[float, object]] = []
         if bm25_tokens:
             expanded = _expand_query_tokens(bm25_tokens)
             bm25_query = self._build_bm25_query(expanded)
@@ -136,29 +142,16 @@ class Searcher:
                 bm25_query = self._wrap_filters(bm25_query, corpus, source_ids)
             bm25_results = searcher.search(bm25_query, limit=params.num_to_score)
             bm25_docs = [(score, searcher.doc(addr)) for score, addr in bm25_results.hits]
-        else:
-            bm25_docs = []
 
-        hits = _rrf_merge(embed_docs, bm25_docs, params, self._embed_cache,
-                          query_vec=query_vec)
+        # ── Merge: RRF with score-weighted BM25 ──
+        hits = _rrf_merge(cosine_results, bm25_docs, searcher, self._schema,
+                          params, self._embed_cache)
 
-        # Graph expansion: traverse edges from top results to find related docs
+        # ── Graph expansion ──
         if self._graph_store is not None and self._embed_cache is not None and query_vec is not None:
             hits = _graph_expand(hits, query_vec, self._graph_store, self._embed_cache, params)
 
         return Ok(hits)
-
-    def _build_embedding_query(self, embedding: list[float]) -> tantivy.Query:
-        dims = len(embedding)
-        score = 1.0 / dims
-        tokens = binarize_embedding(embedding)
-        subqueries = [
-            (tantivy.Occur.Should, tantivy.Query.const_score_query(
-                tantivy.Query.term_query(self._schema, F_CHUNK_TOKENS, tok), score=score,
-            ))
-            for tok in tokens
-        ]
-        return tantivy.Query.boolean_query(subqueries)
 
     def _build_bm25_query(self, tokens: list[str]) -> tantivy.Query:
         subqueries = [
@@ -207,122 +200,102 @@ def _compute_decay(access_count, last_accessed):
     return decay * access_boost
 
 
-def _rrf_merge(embed_docs, bm25_docs, params, embed_cache=None, query_vec=None):
-    scored = {}
-    for rank, (raw_score, doc) in enumerate(embed_docs):
-        cid = _doc_field(doc, F_CHUNK_ID)
-        if not cid:
-            continue
-        rrf = _EMBED_WEIGHT / (_RRF_K + rank + 1)
-        scored[cid] = (SearchScores(rrf=rrf, embedding=raw_score, bm25=0.0), doc)
+def _rrf_merge(cosine_results, bm25_docs, searcher, schema, params, embed_cache=None):
+    """Merge full-precision cosine results with BM25 results via score-weighted RRF.
 
-    # Score-weighted BM25: preserve raw score magnitude in RRF contribution.
-    # A doc matching "bug" (score=4.0) gets much more weight than one matching "and" (score=1.6).
+    cosine_results: list of (doc_id, cosine_similarity) from embedding cache
+    bm25_docs: list of (bm25_score, tantivy_doc) from tantivy search
+    """
+    # Build scored dict keyed by doc_id (not chunk_id) for cosine results
+    scored: dict[str, tuple[SearchScores, float]] = {}  # doc_id → (scores, cosine_sim)
+
+    for rank, (doc_id, cosine_sim) in enumerate(cosine_results):
+        rrf = _EMBED_WEIGHT / (_RRF_K + rank + 1)
+        scored[doc_id] = (SearchScores(rrf=rrf, embedding=cosine_sim, bm25=0.0), cosine_sim)
+
+    # Score-weighted BM25 fusion
     max_bm25 = bm25_docs[0][0] if bm25_docs else 1.0
     if max_bm25 < 1e-6:
         max_bm25 = 1.0
 
+    bm25_doc_map: dict[str, tuple[float, float]] = {}  # doc_id → (rrf_contribution, raw_bm25)
     for rank, (raw_score, doc) in enumerate(bm25_docs):
-        cid = _doc_field(doc, F_CHUNK_ID)
-        if not cid:
+        doc_id = _doc_field(doc, F_ID) or ""
+        if not doc_id or doc_id in bm25_doc_map:
             continue
         rank_rrf = _BM25_WEIGHT / (_RRF_K + rank + 1)
         score_factor = raw_score / max_bm25
-        rrf = rank_rrf * score_factor  # strong matches get full weight
-        if cid in scored:
-            existing = scored[cid][0]
-            merged = SearchScores(rrf=existing.rrf + rrf, embedding=existing.embedding, bm25=raw_score)
-            scored[cid] = (merged, scored[cid][1])
+        rrf = rank_rrf * score_factor
+        bm25_doc_map[doc_id] = (rrf, raw_score)
+
+    # Merge BM25 into scored
+    for doc_id, (bm25_rrf, raw_bm25) in bm25_doc_map.items():
+        if doc_id in scored:
+            existing, cosine_sim = scored[doc_id]
+            merged = SearchScores(
+                rrf=existing.rrf + bm25_rrf,
+                embedding=existing.embedding,
+                bm25=raw_bm25,
+            )
+            scored[doc_id] = (merged, cosine_sim)
         else:
-            scored[cid] = (SearchScores(rrf=rrf, embedding=0.0, bm25=raw_score), doc)
+            scored[doc_id] = (SearchScores(rrf=bm25_rrf, embedding=0.0, bm25=raw_bm25), 0.0)
 
-    # Stale entry filtering + cosine reranking
+    # Apply decay
     if embed_cache is not None:
-        _filter_stale_and_cosine_rerank(scored, embed_cache, query_vec)
-
-    decay_map = {}
-    if embed_cache is not None:
-        doc_ids = list({_doc_field(scored[cid][1], F_ID) or "" for cid in scored})
-        doc_ids = [d for d in doc_ids if d]
+        doc_ids = [d for d in scored if d]
         if doc_ids:
             meta = embed_cache.get_decay_metadata(doc_ids)
             for did, (ac, la) in meta.items():
-                decay_map[did] = _compute_decay(ac, la)
+                if did in scored:
+                    factor = _compute_decay(ac, la)
+                    old_scores, cosine_sim = scored[did]
+                    scored[did] = (
+                        SearchScores(rrf=old_scores.rrf * factor, embedding=old_scores.embedding, bm25=old_scores.bm25),
+                        cosine_sim,
+                    )
 
-    if decay_map:
-        decayed = {}
-        for cid, (scores, doc) in scored.items():
-            did = _doc_field(doc, F_ID) or ""
-            factor = decay_map.get(did, 1.0)
-            decayed[cid] = (SearchScores(rrf=scores.rrf * factor, embedding=scores.embedding, bm25=scores.bm25), doc)
-        scored = decayed
-
+    # Rank and build hits
     ranked = sorted(scored.items(), key=lambda x: x[1][0].rrf, reverse=True)
-    doc_counts: dict[str, int] = defaultdict(int)
     hits = []
 
-    for cid, (scores, doc) in ranked:
-        if scores.rrf < params.min_rrf_score or scores.bm25 < params.min_bm25_score or scores.embedding < params.min_embedding_score:
+    for doc_id, (scores, _cosine) in ranked:
+        if scores.rrf < params.min_rrf_score:
             continue
-        doc_id = _doc_field(doc, F_ID) or ""
-        if doc_counts[doc_id] >= params.max_hits_per_doc:
+        if scores.bm25 < params.min_bm25_score or scores.embedding < params.min_embedding_score:
             continue
-        doc_counts[doc_id] += 1
-        ca = _doc_json(doc, F_CHUNK_ATTRIBUTES)
-        body = ca.get("body", "") if ca else ""
-        attrs = _doc_json(doc, F_ATTRIBUTES)
-        hits.append(SearchHit(doc_id=doc_id, chunk_id=cid, body=body, scores=scores, attributes=attrs, chunk_attributes=ca))
+
+        # Look up doc body from tantivy for display
+        body, attrs, chunk_attrs = _lookup_doc_content(doc_id, searcher, schema)
+
+        hits.append(SearchHit(
+            doc_id=doc_id,
+            chunk_id=f"{doc_id}-0",
+            body=body,
+            scores=scores,
+            attributes=attrs,
+            chunk_attributes=chunk_attrs,
+        ))
         if len(hits) >= params.num_to_return:
             break
 
     return hits
 
 
-def _filter_stale_and_cosine_rerank(scored, embed_cache, query_vec):
-    """Penalize stale entries and blend full-precision cosine similarity."""
-    doc_id_map = {}
-    for cid, (scores, doc) in scored.items():
-        did = _doc_field(doc, F_ID) or ""
-        if did:
-            doc_id_map.setdefault(did, []).append(cid)
-
-    if not doc_id_map:
-        return
-
-    # Fetch embedding vectors — missing means stale/orphaned
-    vecs = embed_cache.get_many(list(doc_id_map.keys()))
-
-    # Penalize stale entries (no cached embedding)
-    for did, cids in doc_id_map.items():
-        if did not in vecs:
-            for cid in cids:
-                if cid in scored:
-                    old, doc = scored[cid]
-                    scored[cid] = (SearchScores(rrf=old.rrf * 0.1, embedding=old.embedding, bm25=old.bm25), doc)
-
-    # Cosine re-ranking with query vector
-    if query_vec is None or not vecs:
-        return
-
+def _lookup_doc_content(doc_id, searcher, schema):
+    """Look up document body and attributes from tantivy index."""
     try:
-        qv = np.array(query_vec, dtype=np.float32)
-        qv_norm = np.linalg.norm(qv)
-        if qv_norm < 1e-9:
-            return
-
-        for did, vec in vecs.items():
-            dv = np.array(vec, dtype=np.float32)
-            dv_norm = np.linalg.norm(dv)
-            if dv_norm < 1e-9:
-                continue
-            cosine = float(np.dot(qv, dv) / (qv_norm * dv_norm))
-            for cid in doc_id_map.get(did, []):
-                if cid in scored:
-                    old, doc = scored[cid]
-                    blended = old.rrf * (1 - _COSINE_BLEND) + cosine * _COSINE_BLEND
-                    scored[cid] = (SearchScores(rrf=blended, embedding=old.embedding, bm25=old.bm25), doc)
+        query = tantivy.Query.term_query(schema, F_ID, doc_id)
+        results = searcher.search(query, limit=3)
+        for _score, addr in results.hits:
+            doc = searcher.doc(addr)
+            ca = _doc_json(doc, F_CHUNK_ATTRIBUTES)
+            if ca and ca.get("body"):
+                attrs = _doc_json(doc, F_ATTRIBUTES)
+                return ca.get("body", ""), attrs, ca
     except Exception:
-        pass  # graceful fallback if numpy ops fail
+        pass
+    return "", None, None
 
 
 def _graph_expand(hits, query_vec, graph_store, embed_cache, params):
