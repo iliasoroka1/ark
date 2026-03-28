@@ -74,7 +74,7 @@ async def expand_query(query: str) -> str | None:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "google/gemini-2.0-flash-001",
+                    "model": "google/gemini-3.1-flash-lite-preview",
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 60,
                     "temperature": 0.0,

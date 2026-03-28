@@ -106,6 +106,52 @@ _dec_response = msgspec.json.Decoder(_EmbeddingResponse)
 _dec_error = msgspec.json.Decoder(_EmbeddingErrorWrapper)
 
 
+class OpenRouterEmbedding:
+    """Embedding via OpenRouter API (supports Perplexity, BGE, etc.)."""
+    __slots__ = ("_model", "_dims", "_api_key")
+
+    def __init__(self, model: str, api_key: str, dims: int = 1024) -> None:
+        self._model = model
+        self._api_key = api_key
+        self._dims = dims
+
+    @property
+    def dims(self) -> int:
+        return self._dims
+
+    async def embed(self, text: str) -> Result[list[float], IndexErr]:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://openrouter.ai/api/v1/embeddings",
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"model": self._model, "input": text},
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    raw = await resp.read()
+                    if resp.status != 200:
+                        try:
+                            err = _dec_error.decode(raw)
+                            return Error(IndexErr(code="api_error", message=err.error.message))
+                        except Exception:
+                            return Error(IndexErr(code="api_error", message=f"HTTP {resp.status}"))
+                    parsed = _dec_response.decode(raw)
+                    if not parsed.data:
+                        return Error(IndexErr(code="empty", message="No embeddings returned"))
+                    vec = parsed.data[0].embedding
+                    if self._dims and len(vec) != self._dims:
+                        self._dims = len(vec)
+                    return Ok(vec)
+        except Exception as e:
+            return Error(IndexErr(code="embed_error", message=str(e)))
+
+    async def embed_document(self, text: str) -> Result[list[float], IndexErr]:
+        return await self.embed(text)
+
+
 class CatsuEmbedding:
     __slots__ = ("_client", "_model", "_dims")
 

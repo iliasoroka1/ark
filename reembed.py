@@ -38,13 +38,19 @@ ENGINEERING = [
 
 
 async def main():
-    memory_dir = os.path.join(os.path.expanduser("~"), ".ark", "memory")
+    ark_home = os.path.expanduser("~/.ark")
+    memory_dir = os.path.join(ark_home, "memory")
 
-    # Clear old data
-    print("Clearing old index and embeddings...")
+    # Clear old data — tantivy index, embedding cache, and graph
+    print("Clearing old index, embeddings, and graph...")
     if os.path.exists(memory_dir):
         shutil.rmtree(memory_dir)
     os.makedirs(memory_dir, exist_ok=True)
+    for db_file in ["embeddings.db", "graph.db"]:
+        p = os.path.join(ark_home, db_file)
+        if os.path.exists(p):
+            os.remove(p)
+            print(f"  Removed {db_file}")
 
     # Force re-init with new model
     import ark.local as local
@@ -79,7 +85,16 @@ async def main():
         if (i + 1) % 100 == 0:
             print(f"  [{i+1}/{len(ag_news)}]")
 
-    total = len(ENGINEERING) + len(NOISE) + len(ag_news)
+    # Ingest tech news noise
+    print("Ingesting 500 tech news memories...")
+    with open('tech_noise.json') as f:
+        tech_news = json.load(f)
+    for i, text in enumerate(tech_news):
+        await call_tool('ingest', {'content': text})
+        if (i + 1) % 100 == 0:
+            print(f"  [{i+1}/{len(tech_news)}]")
+
+    total = len(ENGINEERING) + len(NOISE) + len(ag_news) + len(tech_news)
     print(f"\nDone: {total} memories ingested with nomic-embed-text-v1.5 (768d)")
 
     # Verify

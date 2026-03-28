@@ -41,7 +41,8 @@ def _ensure_init() -> None:
     from ark.engine.graph_store import GraphStore
     from ark.engine.circuit_breaker import CircuitBreakerEmbedding
 
-    memory_dir = os.path.join(os.path.expanduser("~"), ".ark", "memory")
+    ark_home = os.environ.get("ARK_HOME", os.path.join(os.path.expanduser("~"), ".ark"))
+    memory_dir = os.path.join(ark_home, "memory")
 
     embedding = _make_embedding()
     _graph_store = GraphStore(os.path.join(memory_dir, "graph.db"))
@@ -58,6 +59,14 @@ def _ensure_init() -> None:
 
 
 def _make_embedding():
+    # OpenRouter embedding API (e.g. Perplexity pplx-embed-v1)
+    or_embed = os.environ.get("OPENROUTER_EMBED_MODEL", "")
+    or_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if or_embed and or_key:
+        from ark.engine.embed import OpenRouterEmbedding
+        dims = int(os.environ.get("EMBEDDING_DIMS", "1024") or "1024")
+        return OpenRouterEmbedding(model=or_embed, api_key=or_key, dims=dims)
+
     model = os.environ.get("EMBEDDING_MODEL", "")
     dims = int(os.environ.get("EMBEDDING_DIMS", "1024") or "1024")
 
@@ -72,7 +81,7 @@ def _make_embedding():
         pass
 
     raise RuntimeError(
-        "No embedding provider available. Set EMBEDDING_MODEL or install fastembed."
+        "No embedding provider available. Set EMBEDDING_MODEL, OPENROUTER_EMBED_MODEL, or install fastembed."
     )
 
 
