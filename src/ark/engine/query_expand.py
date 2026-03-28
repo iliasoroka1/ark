@@ -23,22 +23,20 @@ _VAGUE_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
-_EXPANSION_PROMPT = """You are a search query expander for a software engineering knowledge base.
-Given a vague query, output 5-10 specific technical terms that would appear in relevant memories.
+_EXPANSION_PROMPT = """You expand vague search queries into specific terms for a knowledge base.
+Think about what concrete things, systems, or concepts the query is really asking about.
+Output 5-10 specific terms that relevant documents would contain.
 Output ONLY the terms, space-separated, no explanation.
 
 Examples:
-Query: security improvements we made
-Terms: JWT OAuth MFA SSO authentication token session encryption certificate
+Query: what could go wrong with our setup
+Terms: failure outage error configuration incident downtime recovery
 
-Query: how do we prevent API abuse
-Terms: rate limiting throttle token bucket Envoy proxy request per minute
+Query: how do we keep things running smoothly
+Terms: monitoring alerting scaling performance latency uptime health
 
-Query: team workflow and ceremonies
-Terms: sprint planning standup code review on-call rotation retro
-
-Query: database performance and optimization
-Terms: index query materialized view replication cache TTL latency
+Query: recent changes and updates
+Terms: migration update deployment release version configuration rollout
 
 Query: {query}
 Terms:"""
