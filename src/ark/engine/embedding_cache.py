@@ -161,6 +161,48 @@ class EmbeddingCache:
         top_idx = indices[np.argsort(-scores)][:limit]
         return [(ids[i], float(sims[i])) for i in top_idx]
 
+    def search_by_vector(
+        self,
+        query_vec: list[float],
+        corpus: str,
+        limit: int = 50,
+        threshold: float = 0.0,
+    ) -> list[tuple[str, float]]:
+        """Search for similar documents by raw query vector. Returns (doc_id, cosine_sim) pairs."""
+        import numpy as np
+
+        rows = self._conn.execute(
+            "SELECT doc_id, vec FROM embeddings WHERE corpus = ?",
+            (corpus,),
+        ).fetchall()
+        if not rows:
+            return []
+
+        q = np.array(query_vec, dtype=np.float32)
+        q_norm = np.linalg.norm(q)
+        if q_norm < 1e-12:
+            return []
+        q = q / q_norm
+
+        ids = [r[0] for r in rows]
+        mat = np.array([_unpack(r[1]) for r in rows], dtype=np.float32)
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        norms = np.maximum(norms, 1e-12)
+        mat = mat / norms
+
+        sims = mat @ q
+        if threshold > 0:
+            mask = sims >= threshold
+            if not mask.any():
+                return []
+            indices = np.where(mask)[0]
+            scores = sims[indices]
+            top_idx = indices[np.argsort(-scores)][:limit]
+        else:
+            top_idx = np.argsort(-sims)[:limit]
+
+        return [(ids[i], float(sims[i])) for i in top_idx]
+
     def max_cosine_similarity(self, vec: list[float], corpus: str) -> float:
         rows = self._conn.execute(
             "SELECT vec FROM embeddings WHERE corpus = ?", (corpus,)

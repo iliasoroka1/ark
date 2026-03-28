@@ -46,13 +46,20 @@ async def embed_batch(
 
 
 class FastEmbedProvider:
-    __slots__ = ("_model", "_dims")
+    __slots__ = ("_model", "_dims", "_query_prefix", "_doc_prefix")
 
-    def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5") -> None:
+    def __init__(self, model_name: str = "nomic-ai/nomic-embed-text-v1.5") -> None:
         from fastembed import TextEmbedding
 
         self._model = TextEmbedding(model_name=model_name)
-        probe = list(self._model.embed(["probe"]))[0]
+        # Nomic models use task prefixes for better retrieval
+        if "nomic" in model_name.lower():
+            self._query_prefix = "search_query: "
+            self._doc_prefix = "search_document: "
+        else:
+            self._query_prefix = ""
+            self._doc_prefix = ""
+        probe = list(self._model.embed([self._doc_prefix + "probe"]))[0]
         self._dims = len(probe)
 
     @property
@@ -60,8 +67,19 @@ class FastEmbedProvider:
         return self._dims
 
     async def embed(self, text: str) -> Result[list[float], IndexErr]:
+        """Embed text as a query (uses query prefix for retrieval models)."""
         try:
-            vecs = await asyncio.to_thread(lambda: list(self._model.embed([text])))
+            prefixed = self._query_prefix + text
+            vecs = await asyncio.to_thread(lambda: list(self._model.embed([prefixed])))
+            return Ok(vecs[0].tolist())
+        except Exception as e:
+            return Error(IndexErr(code="embed_error", message=str(e)))
+
+    async def embed_document(self, text: str) -> Result[list[float], IndexErr]:
+        """Embed text as a document (uses document prefix for retrieval models)."""
+        try:
+            prefixed = self._doc_prefix + text
+            vecs = await asyncio.to_thread(lambda: list(self._model.embed([prefixed])))
             return Ok(vecs[0].tolist())
         except Exception as e:
             return Error(IndexErr(code="embed_error", message=str(e)))

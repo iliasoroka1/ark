@@ -8,10 +8,12 @@ from pathlib import Path
 
 import tantivy
 
+import asyncio
+
 from ark.engine.result import Error, Ok, Result
 from ark.engine.embed import Embedding, embed_batch
 from ark.engine.embedding_cache import EmbeddingCache
-from ark.engine.tokenizer import Chunker, TextChunker, binarize_embedding, tokenize_text
+from ark.engine.tokenizer import Chunker, TextChunker, tokenize_text
 from ark.engine.types import IndexDoc, IndexErr
 
 log = logging.getLogger(__name__)
@@ -109,21 +111,25 @@ class Indexer:
         n = 0
         failed = 0
 
-        embed_results = await embed_batch(self._embedding, chunks)
+        # Use document prefix for indexing if available
+        embed_doc = getattr(self._embedding, 'embed_document', None)
+        if embed_doc is not None:
+            coros = [embed_doc(chunk) for chunk in chunks]
+            embed_results = await asyncio.gather(*coros)
+        else:
+            embed_results = await embed_batch(self._embedding, chunks)
 
         for i, body in enumerate(chunks):
             cid = f"{doc.id}-{i}"
             word_tokens = tokenize_text(body)
 
             result = embed_results[i]
-            embed_tokens = result.map(binarize_embedding).unwrap_or([])
             if result.is_err():
                 failed += 1
 
             if self._embed_cache is not None and result.is_ok():
                 raw_vec = result.unwrap()
                 # Dedup check — skip if very similar content already exists
-                # (exclude self by checking before caching)
                 sim = self._embed_cache.max_cosine_similarity(raw_vec, doc.corpus)
                 if sim >= DEDUP_THRESHOLD:
                     continue
@@ -131,7 +137,7 @@ class Indexer:
                 if i == 0:
                     self._embed_cache.put(doc.id, doc.corpus, raw_vec)
 
-            all_tokens = word_tokens + embed_tokens
+            all_tokens = word_tokens
 
             chunk_doc = tantivy.Document()
             chunk_doc.add_text(F_CORPUS, doc.corpus)
