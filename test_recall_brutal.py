@@ -1,7 +1,7 @@
 """Brutal recall benchmark for ark memory search.
 
 ~1173 docs: 23 engineering + 150 general noise + 500 AG News + 500 tech news.
-70 queries across 7 categories including new harder ones.
+130 queries across 15 categories.
 
 Categories:
   1. Exact (10) — verbatim phrases
@@ -10,8 +10,15 @@ Categories:
   4. Adversarial (10) — software terms vs generic tech noise
   5. Negative (5) — should return nothing relevant
   6. Multi-hop (5) — require chaining facts
-  7. Lexical traps (10) — NEW: queries with words that match noise MORE than our memories
-  8. Compositional (10) — NEW: require combining info from 2+ memories
+  7. Lexical traps (10) — queries with words that match noise MORE than our memories
+  8. Compositional (10) — require combining info from 2+ memories
+  9. Temporal (10) — time-specific queries requiring date awareness
+  10. Conversational (10) — messy, vague, human-like queries
+  11. Synonym hell (10) — zero lexical overlap with source docs
+  12. Precision (10) — must return ONE specific memory, not similar ones
+  13. Negation (5) — exclude a specific topic
+  14. Cross-domain (10) — connecting facts across different engineering domains
+  15. Needle (5) — unique detail buried in a longer memory
 """
 
 import json
@@ -220,7 +227,218 @@ COMPOSITIONAL = [
               "postmortem + replication + monitoring + on-call"),
 ]
 
-ALL_QUERIES = EXACT + PARAPHRASE + TANGENTIAL + ADVERSARIAL + NEGATIVE + MULTIHOP + LEXICAL_TRAPS + COMPOSITIONAL
+# 9. Temporal — time-specific queries requiring date awareness
+TEMPORAL = [
+    TestQuery("what happened in January 2026", "temporal",
+              [MFA],
+              "MFA rolled out 2026-01-10"),
+    TestQuery("changes made in February 2026", "temporal",
+              [MIGRATION, REPLICATION, INDEX],
+              "migration ran 2026-02-18, replication tested 2026-02-25"),
+    TestQuery("most recent production deployment", "temporal",
+              [CART],
+              "cart-service v2.3.1 deployed"),
+    TestQuery("what was the last incident", "temporal",
+              [INCIDENT],
+              "2026-03-12 payments outage"),
+    TestQuery("things that changed this quarter", "temporal",
+              [MFA, MIGRATION, REPLICATION, INCIDENT, CART],
+              "Q1 2026 events"),
+    TestQuery("oldest configuration still in use", "temporal",
+              [JWT, RATELIMIT],
+              "JWT 24h expiry and rate limit 100req/min — no change dates"),
+    TestQuery("when was the database schema last modified", "temporal",
+              [MIGRATION],
+              "migration 047 on 2026-02-18"),
+    TestQuery("March 2026 events", "temporal",
+              [INCIDENT],
+              "2026-03-12 payments outage"),
+    TestQuery("schedule changes this year", "temporal",
+              [SPRINT],
+              "sprint planning moved to Tuesdays"),
+    TestQuery("what was set up before the outage", "temporal",
+              [REPLICATION, MIGRATION, INDEX],
+              "replication + migration + index all before 2026-03-12"),
+]
+
+# 10. Conversational — messy, vague, human-like phrasing
+CONVERSATIONAL = [
+    TestQuery("that thing with the database that was really slow", "conversational",
+              [MATVIEW],
+              "6-table join taking 800ms"),
+    TestQuery("the login bug we had", "conversational",
+              [BUG],
+              "expired JWT refresh flow bug"),
+    TestQuery("didn't we set up some kind of caching recently", "conversational",
+              [REDIS],
+              "Redis cache for catalog-service"),
+    TestQuery("what's our on-call schedule again", "conversational",
+              [ONCALL],
+              "weekly on-call rotation"),
+    TestQuery("how many requests can someone make", "conversational",
+              [RATELIMIT],
+              "100 req/min per user"),
+    TestQuery("something about tokens expiring too fast", "conversational",
+              [JWT, BUG],
+              "JWT 24h expiry + refresh bug"),
+    TestQuery("who pages who when payments break", "conversational",
+              [DATADOG, ONCALL],
+              "PagerDuty alert to #payments-oncall"),
+    TestQuery("what proxy thing are we using", "conversational",
+              [ENVOY],
+              "Envoy proxy sidecar"),
+    TestQuery("the thing where we made the query faster", "conversational",
+              [MATVIEW, INDEX],
+              "materialized view + composite index"),
+    TestQuery("do we have any audit logging", "conversational",
+              [MIGRATION],
+              "047_add_audit_log_table"),
+]
+
+# 11. Synonym hell — ZERO lexical overlap with source memories
+SYNONYM_HELL = [
+    TestQuery("credential validity duration", "synonym_hell",
+              [JWT],
+              "JWT tokens with 24-hour expiry — no shared words"),
+    TestQuery("request throttling implementation", "synonym_hell",
+              [RATELIMIT],
+              "rate limiting token bucket — different vocabulary"),
+    TestQuery("precomputed aggregate tables for catalog lookups", "synonym_hell",
+              [MATVIEW],
+              "materialized view — domain synonym"),
+    TestQuery("identity federation for workforce applications", "synonym_hell",
+              [SSO],
+              "SSO with Okta — enterprise jargon"),
+    TestQuery("observability stack for financial transactions", "synonym_hell",
+              [DATADOG],
+              "Datadog monitors for payments-api — different framing"),
+    TestQuery("horizontal pod autoscaler configuration", "synonym_hell",
+              [AUTOSCALE],
+              "auto-scaling min 3 max 20 CPU 65% — k8s terminology"),
+    TestQuery("write-ahead log shipping for disaster recovery", "synonym_hell",
+              [REPLICATION],
+              "streaming replication — PostgreSQL internals terminology"),
+    TestQuery("structured fault report for service degradation", "synonym_hell",
+              [INCIDENT],
+              "incident postmortem — formal language"),
+    TestQuery("opaque continuation tokens for paging", "synonym_hell",
+              [PAGINATION],
+              "cursor-based base64 pagination — different vocabulary"),
+    TestQuery("ephemeral credential rotation defect", "synonym_hell",
+              [BUG],
+              "login bug expired JWT refresh — security jargon"),
+]
+
+# 12. Precision — must return exactly ONE specific memory, not related ones
+PRECISION = [
+    TestQuery("what algorithm does our rate limiter use", "precision",
+              [RATELIMIT],
+              "must find token bucket, not Envoy proxy or generic rate limiting"),
+    TestQuery("what's the TTL on our product cache", "precision",
+              [REDIS],
+              "must find Redis TTL 5min, not generic caching mentions"),
+    TestQuery("what columns does our audit log table have", "precision",
+              [MIGRATION],
+              "must find user_id, action, resource, timestamp"),
+    TestQuery("what is our API pagination max page size", "precision",
+              [PAGINATION],
+              "must find max 100, default 25"),
+    TestQuery("which cluster is cart-service deployed to", "precision",
+              [CART],
+              "must find east-1, 3 replicas"),
+    TestQuery("what is the p99 latency threshold for payments alerts", "precision",
+              [DATADOG],
+              "must find 400ms"),
+    TestQuery("what CPU target does our autoscaler use", "precision",
+              [AUTOSCALE],
+              "must find 65% CPU target"),
+    TestQuery("which database is our primary on", "precision",
+              [REPLICATION],
+              "must find db-prod-01"),
+    TestQuery("what replaced the 6-table join", "precision",
+              [MATVIEW],
+              "must find materialized view"),
+    TestQuery("what PKCE flow did we migrate to", "precision",
+              [OAUTH],
+              "must find OAuth 2.0 with PKCE"),
+]
+
+# 13. Negation — should return specific memories while EXCLUDING a topic
+NEGATION = [
+    TestQuery("auth changes besides OAuth and SSO", "negation",
+              [JWT, SESSION, MFA, BUG],
+              "should find JWT/session/MFA/bug, NOT OAuth or SSO"),
+    TestQuery("infrastructure that isn't about databases", "negation",
+              [CART, AUTOSCALE, REDIS, ENVOY, DATADOG],
+              "should find non-DB infra memories"),
+    TestQuery("API standards other than pagination", "negation",
+              [VERSIONING, ERRORS, ENVOY],
+              "should find versioning/errors/envoy, NOT pagination"),
+    TestQuery("process changes that aren't sprint planning", "negation",
+              [ONCALL, CODEREVIEW],
+              "should find on-call/code review, NOT sprint"),
+    TestQuery("database work besides the audit log migration", "negation",
+              [MATVIEW, INDEX, REPLICATION],
+              "should find matview/index/replication, NOT migration"),
+]
+
+# 14. Cross-domain — connecting facts across different engineering areas
+CROSS_DOMAIN = [
+    TestQuery("what could cause cascading failures in our system", "cross_domain",
+              [REPLICATION, INCIDENT, AUTOSCALE, RATELIMIT],
+              "DB failover + outage + scaling + rate limits"),
+    TestQuery("how does a user request flow through our infrastructure", "cross_domain",
+              [ENVOY, RATELIMIT, JWT, REDIS, CART],
+              "proxy → rate limit → auth → cache → service"),
+    TestQuery("what would we need to change for SOC2 compliance", "cross_domain",
+              [MFA, MIGRATION, CODEREVIEW, ONCALL],
+              "MFA + audit log + code review + incident response"),
+    TestQuery("single points of failure in our architecture", "cross_domain",
+              [REPLICATION, REDIS, AUTOSCALE],
+              "DB primary + cache + single-pod risk"),
+    TestQuery("what happens if we lose east-1", "cross_domain",
+              [CART, REPLICATION, DATADOG],
+              "cart-service on east-1 + DB primary + monitoring"),
+    TestQuery("onboarding a new developer: what do they need to know", "cross_domain",
+              [VERSIONING, ERRORS, PAGINATION, CODEREVIEW, SPRINT],
+              "API standards + process"),
+    TestQuery("debugging a slow API response end to end", "cross_domain",
+              [ENVOY, REDIS, MATVIEW, INDEX, DATADOG],
+              "proxy → cache → query → index → monitoring"),
+    TestQuery("disaster recovery readiness", "cross_domain",
+              [REPLICATION, AUTOSCALE, DATADOG, ONCALL, INCIDENT],
+              "DB replica + scaling + monitoring + on-call + postmortem"),
+    TestQuery("attack surface of our public APIs", "cross_domain",
+              [JWT, MFA, RATELIMIT, ENVOY, OAUTH],
+              "auth + rate limiting + proxy + OAuth"),
+    TestQuery("what would break if Redis went down", "cross_domain",
+              [REDIS, MATVIEW],
+              "cache layer + would need direct queries"),
+]
+
+# 15. Needle in haystack — unique detail buried in a longer memory
+NEEDLE = [
+    TestQuery("envoy-ratelimit ConfigMap", "needle",
+              [ENVOY],
+              "specific detail: envoy-ratelimit ConfigMap"),
+    TestQuery("15-minute access token", "needle",
+              [SESSION],
+              "specific detail: 15-min access token in session refactor"),
+    TestQuery("47 minutes of downtime", "needle",
+              [INCIDENT],
+              "specific detail: SEV-1, 47 min downtime"),
+    TestQuery("connection pool exhaustion", "needle",
+              [INCIDENT],
+              "specific detail: root cause of payments outage"),
+    TestQuery("v1 API sunset date", "needle",
+              [VERSIONING],
+              "specific detail: v1 sunset 2026-06-01"),
+]
+
+ALL_QUERIES = (EXACT + PARAPHRASE + TANGENTIAL + ADVERSARIAL + NEGATIVE +
+               MULTIHOP + LEXICAL_TRAPS + COMPOSITIONAL +
+               TEMPORAL + CONVERSATIONAL + SYNONYM_HELL + PRECISION +
+               NEGATION + CROSS_DOMAIN + NEEDLE)
 
 
 def run_search(query: str) -> list[dict]:
@@ -317,10 +535,15 @@ def main():
         ("Exact", EXACT), ("Paraphrase", PARAPHRASE), ("Tangential", TANGENTIAL),
         ("Adversarial", ADVERSARIAL), ("Negative", NEGATIVE), ("Multi-hop", MULTIHOP),
         ("Lexical traps", LEXICAL_TRAPS), ("Compositional", COMPOSITIONAL),
+        ("Temporal", TEMPORAL), ("Conversational", CONVERSATIONAL),
+        ("Synonym hell", SYNONYM_HELL), ("Precision", PRECISION),
+        ("Negation", NEGATION), ("Cross-domain", CROSS_DOMAIN),
+        ("Needle", NEEDLE),
     ]
     total = len(ALL_QUERIES)
+    n_positive = sum(1 for q in ALL_QUERIES if not q.is_negative)
     print("=" * 80)
-    print(f"  ark BRUTAL benchmark — top-{K}, {total} queries, ~1173 docs")
+    print(f"  ark BRUTAL benchmark — top-{K}, {total} queries ({n_positive}+/{total-n_positive}-), ~1173 docs")
     print(f"  23 eng + 150 general + 500 AG News + 500 tech news")
     print("=" * 80)
     rows = []

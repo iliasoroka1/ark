@@ -7,6 +7,7 @@ score-weighted RRF, plus graph neighbor expansion.
 from __future__ import annotations
 
 import logging
+import os
 from collections import defaultdict
 from datetime import UTC, datetime
 
@@ -34,6 +35,9 @@ _DECAY_FLOOR = 0.3
 _DECAY_HALFLIFE = 365.0
 _ACCESS_BOOST_CAP = 1.3
 _ACCESS_BOOST_STEP = 0.02
+_PRF_DOCS = 3          # number of top cosine hits to extract terms from
+_PRF_TERMS = 12        # max terms to extract for pseudo-relevance feedback
+_PRF_MIN_SIM = 0.35    # minimum cosine similarity to consider a doc for PRF
 
 
 class Searcher:
@@ -67,7 +71,6 @@ class Searcher:
         query_vec = None
 
         # ── Signal 1: Full-precision cosine via embedding cache ──
-        # Embeds original query + expanded query (if provided), merges by max sim.
         cosine_results: list[tuple[str, float]] = []
         match await self._embedding.embed(query):
             case Ok(qv):
@@ -79,18 +82,26 @@ class Searcher:
             case Error(err):
                 pass
 
-        # Multi-query cosine: embed the original query combined with a concise
-        # semantic summary (not raw synonym terms) and merge results.
-        # Only for vague queries where the expanded terms are available.
+        # ── Pseudo-relevance feedback (PRF) ──
+        # Extract key terms from top cosine hits to auto-expand the query.
+        # This bridges vocabulary gaps without hardcoded synonym maps.
+        prf_terms = _pseudo_relevance_feedback(
+            cosine_results, self._index, self._schema, corpus, source_ids,
+            top_k=_PRF_DOCS, max_terms=_PRF_TERMS,
+        )
+        if prf_terms and not expanded_query:
+            expanded_query = prf_terms
+
+        # ── Signal 1b: Enriched cosine ──
+        # Re-embed "query + expansion terms" to pull the vector toward
+        # the specific vocabulary found in the corpus.
         if expanded_query and expanded_query != query and self._embed_cache is not None:
-            # Embed "original query + expanded" as a single enriched query
             enriched = f"{query} {expanded_query}"
             match await self._embedding.embed(enriched):
                 case Ok(enr_vec):
                     enr_cosine = self._embed_cache.search_by_vector(
                         enr_vec, corpus or "", limit=params.num_to_score,
                     )
-                    # Merge: keep max cosine sim per doc
                     existing = dict(cosine_results)
                     for doc_id, sim in enr_cosine:
                         if doc_id not in existing or sim > existing[doc_id]:
@@ -111,7 +122,7 @@ class Searcher:
             bm25_results = searcher.search(bm25_query, limit=params.num_to_score)
             bm25_docs = [(score, searcher.doc(addr)) for score, addr in bm25_results.hits]
 
-        # ── Signal 2b: BM25 on LLM-expanded query (half weight) ──
+        # ── Signal 2b: BM25 on expanded query (half weight) ──
         bm25_expanded_docs: list[tuple[float, object]] = []
         if expanded_query and expanded_query.strip() and expanded_query != query:
             exp_query, _errors = self._index.parse_query_lenient(expanded_query, [F_CHUNK_BODY])
@@ -148,6 +159,78 @@ class Searcher:
             sid_q = tantivy.Query.boolean_query(sid_subqs)
             clauses.append((tantivy.Occur.Must, tantivy.Query.const_score_query(sid_q, score=0.0)))
         return tantivy.Query.boolean_query(clauses)
+
+
+def _pseudo_relevance_feedback(
+    cosine_results: list[tuple[str, float]],
+    index: tantivy.Index,
+    schema: tantivy.Schema,
+    corpus: str | None,
+    source_ids: list[str] | None,
+    top_k: int = 3,
+    max_terms: int = 12,
+) -> str | None:
+    """Extract key terms from top cosine-similar documents (pseudo-relevance feedback).
+
+    Looks up the body text of the top-K cosine hits in tantivy, tokenizes them,
+    and returns the most frequent non-stopword terms. These terms bridge the
+    vocabulary gap between the query and relevant documents automatically.
+    """
+    candidates = [(doc_id, sim) for doc_id, sim in cosine_results[:top_k] if sim >= _PRF_MIN_SIM]
+    if not candidates:
+        return None
+
+    index.reload()
+    searcher = index.searcher()
+
+    bodies: list[str] = []
+    for doc_id, _sim in candidates:
+        try:
+            q = tantivy.Query.term_query(schema, F_ID, doc_id)
+            results = searcher.search(q, limit=3)
+            for _score, addr in results.hits:
+                doc = searcher.doc(addr)
+                ca = doc.get_all(F_CHUNK_ATTRIBUTES)
+                if ca:
+                    v = ca[0]
+                    body = v.get("body", "") if isinstance(v, dict) else ""
+                    if body:
+                        bodies.append(body)
+                        break
+        except Exception:
+            continue
+
+    if not bodies:
+        return None
+
+    from collections import Counter
+    term_counts: Counter[str] = Counter()
+    _STOP = {
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could",
+        "should", "may", "might", "shall", "can", "need", "dare", "ought",
+        "to", "of", "in", "for", "on", "with", "at", "by", "from", "as",
+        "into", "through", "during", "before", "after", "above", "below",
+        "between", "out", "off", "over", "under", "again", "further", "then",
+        "once", "and", "but", "or", "nor", "not", "so", "yet", "both",
+        "each", "few", "more", "most", "other", "some", "such", "no", "only",
+        "own", "same", "than", "too", "very", "just", "because", "if", "when",
+        "while", "where", "how", "what", "which", "who", "whom", "this",
+        "that", "these", "those", "it", "its", "i", "we", "our", "you",
+        "your", "he", "she", "they", "them", "their", "all", "any", "up",
+    }
+
+    for body in bodies:
+        words = tokenize_text(body)
+        for w in words:
+            if len(w) >= 3 and w not in _STOP:
+                term_counts[w] += 1
+
+    if not term_counts:
+        return None
+
+    top_terms = [term for term, _count in term_counts.most_common(max_terms)]
+    return " ".join(top_terms)
 
 
 def _doc_field(doc, field):
@@ -247,8 +330,8 @@ def _rrf_merge(cosine_results, bm25_docs, searcher, schema, params, embed_cache=
             else:
                 scored[doc_id] = (SearchScores(rrf=rrf, embedding=0.0, bm25=raw_score), 0.0)
 
-    # Apply decay
-    if embed_cache is not None:
+    # Apply decay (skip if ARK_NO_DECAY is set — for deterministic benchmarking)
+    if embed_cache is not None and not os.environ.get("ARK_NO_DECAY"):
         doc_ids = [d for d in scored if d]
         if doc_ids:
             meta = embed_cache.get_decay_metadata(doc_ids)
