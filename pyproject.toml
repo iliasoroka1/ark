@@ -16,6 +16,7 @@ dependencies = [
     "numpy>=1.26",
     "msgspec>=0.18",
     "semantic-text-splitter>=0.13",
+    "fastembed>=0.8.0",
 ]
 
 [project.optional-dependencies]

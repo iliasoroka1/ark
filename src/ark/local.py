@@ -41,7 +41,7 @@ def _ensure_init() -> None:
     from ark.engine.graph_store import GraphStore
     from ark.engine.circuit_breaker import CircuitBreakerEmbedding
 
-    memory_dir = os.path.join(os.path.expanduser("~"), ".tinyclaw", "memory")
+    memory_dir = os.path.join(os.path.expanduser("~"), ".ark", "memory")
 
     embedding = _make_embedding()
     _graph_store = GraphStore(os.path.join(memory_dir, "graph.db"))
@@ -79,6 +79,18 @@ async def call_tool(tool_name: str, payload: dict) -> dict:
     """Call a tool directly, bypassing HTTP."""
     if tool_name == "memory":
         return await _handle_memory(payload)
+    # Map new standalone endpoints to memory actions
+    if tool_name == "search":
+        return await _handle_memory({"action": "search", **payload})
+    if tool_name == "graph-search":
+        return await _handle_memory({"action": "graph_search", **payload})
+    if tool_name == "ingest":
+        return await _handle_memory({"action": "add", "content": payload.get("content", ""), "tag": payload.get("tag", "")})
+    if tool_name == "health":
+        _ensure_init()
+        return {"status": "ok", "mode": "local"}
+    if tool_name == "analyze":
+        return _mem_analyze()
     return {"ok": False, "error": f"local mode doesn't support tool {tool_name!r}"}
 
 

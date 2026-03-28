@@ -8,6 +8,8 @@ from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+EDGE_TYPES = {'derives_from', 'contradicts', 'related_to', 'same_tag', 'co_session', 'calls', 'implements', 'depends_on', 'defines', 'references', 'contains'}
+
 
 class GraphStore:
     __slots__ = ("_conn",)
@@ -113,11 +115,60 @@ class GraphStore:
         """
         return self._conn.execute(sql, params_fwd + params_bwd).fetchall()
 
-    def get_edges_by_type(self, corpus: str, edge_type: str, current_only: bool = True) -> list[tuple[str, str, float]]:
-        sql = "SELECT from_id, to_id, weight FROM edges WHERE corpus = ? AND edge_type = ?"
+    def get_temporal_neighbors(self, doc_id: str, decay_factor: float = 0.98, edge_types: set[str] | None = None) -> list[tuple[str, str, float, float]]:
+        raw = self.get_neighbors(doc_id, edge_types=edge_types)
+        now = datetime.now(UTC)
+        results: list[tuple[str, str, float, float]] = []
+        for to_id, edge_type, weight in raw:
+            row = self._conn.execute(
+                "SELECT valid_at FROM edges WHERE from_id = ? AND to_id = ? AND edge_type = ? AND invalid_at IS NULL",
+                (doc_id, to_id, edge_type),
+            ).fetchone()
+            if row is None:
+                continue
+            valid_at = datetime.fromisoformat(row[0])
+            if valid_at.tzinfo is None:
+                valid_at = valid_at.replace(tzinfo=UTC)
+            days_old = (now - valid_at).total_seconds() / 86400.0
+            decayed_weight = weight * (decay_factor ** days_old)
+            contradictions = self.count_contradictions(to_id)
+            if contradictions > 0:
+                decayed_weight *= decay_factor ** contradictions
+            results.append((to_id, edge_type, weight, decayed_weight))
+        results.sort(key=lambda x: x[3], reverse=True)
+        return results
+
+    def count_contradictions(self, doc_id: str) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE to_id = ? AND edge_type = 'contradicts' AND invalid_at IS NULL",
+            (doc_id,),
+        ).fetchone()
+        return row[0]
+
+    def compact_cluster(self, cluster_id: str, summary_doc_id: str) -> None:
+        row = self._conn.execute("SELECT node_ids, corpus FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone()
+        if row is None:
+            return
+        node_ids = json.loads(row[0])
+        corpus = row[1]
+        now = datetime.now(UTC).isoformat()
+        for node_id in node_ids:
+            self._conn.execute(
+                "UPDATE edges SET invalid_at = ? WHERE (from_id = ? OR to_id = ?) AND invalid_at IS NULL",
+                (now, node_id, node_id),
+            )
+            self.add_edge(summary_doc_id, node_id, "derives_from", corpus, weight=1.0, valid_at=now)
+        self._conn.commit()
+
+    def get_edges_by_type(self, edge_type: str, corpus: str | None = None, current_only: bool = True) -> list[tuple[str, str, float, str]]:
+        params: list[str] = [edge_type]
+        sql = "SELECT from_id, to_id, weight, valid_at FROM edges WHERE edge_type = ?"
+        if corpus:
+            sql += " AND corpus = ?"
+            params.append(corpus)
         if current_only:
             sql += " AND invalid_at IS NULL"
-        return self._conn.execute(sql, (corpus, edge_type)).fetchall()
+        return self._conn.execute(sql, params).fetchall()
 
     def shortest_path(self, from_id: str, to_id: str, edge_types: set[str] | None = None, current_only: bool = True, max_depth: int = 10) -> list[tuple[str, str | None]] | None:
         if from_id == to_id:

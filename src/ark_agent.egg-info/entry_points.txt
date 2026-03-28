@@ -1,0 +1,2 @@
+[console_scripts]
+ark = ark.cli:main

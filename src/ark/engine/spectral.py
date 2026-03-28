@@ -117,14 +117,14 @@ def pagerank(
     et = edge_types or {"derives_from", "contradicts", "related_to", "same_tag", "co_session"}
     edges = []
     for etype in et:
-        edges.extend(graph_store.get_edges_by_type(corpus, etype))
+        edges.extend(graph_store.get_edges_by_type(etype, corpus=corpus))
 
     if not edges:
         return {}
 
     # Build node index
     nodes: set[str] = set()
-    for f, t, _ in edges:
+    for f, t, *_ in edges:
         nodes.add(f)
         nodes.add(t)
 
@@ -181,7 +181,7 @@ def betweenness_centrality(
 
     et = edge_types or {"derives_from", "contradicts", "related_to", "same_tag", "co_session"}
     for etype in et:
-        for f, t, _ in graph_store.get_edges_by_type(corpus, etype):
+        for f, t, *_ in graph_store.get_edges_by_type(etype, corpus=corpus):
             adj[f].append(t)
             adj[t].append(f)
 
@@ -266,14 +266,14 @@ def laplacian_analysis(
     et = edge_types or {"derives_from", "contradicts", "related_to", "same_tag", "co_session"}
     edges = []
     for etype in et:
-        edges.extend(graph_store.get_edges_by_type(corpus, etype))
+        edges.extend(graph_store.get_edges_by_type(etype, corpus=corpus))
 
     if not edges:
         return {"spectral_gap": 0.0, "num_components": 0, "eigenvalues": [], "boundary_nodes": [], "fiedler_communities": {"positive": [], "negative": []}}
 
     # Build node index
     nodes: set[str] = set()
-    for f, t, _ in edges:
+    for f, t, *_ in edges:
         nodes.add(f)
         nodes.add(t)
 
@@ -427,7 +427,7 @@ def local_entropy_batch(
     type_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
     for etype in et:
-        for f, t, _ in graph_store.get_edges_by_type(corpus, etype):
+        for f, t, *_ in graph_store.get_edges_by_type(etype, corpus=corpus):
             type_counts[f][etype] += 1
             type_counts[t][etype] += 1
 

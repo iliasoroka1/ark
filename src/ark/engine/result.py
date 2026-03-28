@@ -31,6 +31,10 @@ class Ok(Generic[T]):
     def map(self, fn: Callable[[T], U]) -> Ok[U]:
         return Ok(fn(self.value))
 
+    def inspect(self, fn: Callable[[T], object]) -> Ok[T]:
+        fn(self.value)
+        return self
+
     def map_err(self, fn: Callable[[object], F]) -> Ok[T]:  # type: ignore[override]
         return self  # type: ignore[return-value]
 
@@ -53,6 +57,9 @@ class Error(Generic[E]):
 
     def map(self, fn: Callable[[object], U]) -> Error[E]:  # type: ignore[override]
         return self  # type: ignore[return-value]
+
+    def inspect(self, fn: Callable[[object], object]) -> Error[E]:
+        return self
 
     def map_err(self, fn: Callable[[E], F]) -> Error[F]:
         return Error(fn(self.error))

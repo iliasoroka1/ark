@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -165,3 +166,83 @@ def _mmr_rerank(candidates, query_vec, embed_cache, lam=0.7):
         selected.append(best_idx)
         result.append(valid_candidates[best_idx])
     return result
+
+
+def deduplicate_hits(hits: list[GraphHit]) -> list[GraphHit]:
+    """Remove duplicate doc_ids, keeping the highest-scored hit for each."""
+    best: dict[str, GraphHit] = {}
+    for hit in hits:
+        existing = best.get(hit.doc_id)
+        if existing is None or hit.score > existing.score:
+            best[hit.doc_id] = hit
+    return sorted(best.values(), key=lambda h: h.score, reverse=True)
+
+
+def parallel_graph_search(
+    seed_ids,
+    queries: list[tuple[str, list[float]]],
+    graph_store: GraphStore,
+    embed_cache: EmbeddingCache,
+    l0_lookup,
+    use_case: str | None = None,
+    hops=2,
+    beam_width=8,
+    diverse=False,
+    mmr_lambda=0.7,
+    edge_types=None,
+) -> GraphResult:
+    """Run graph_search for multiple query angles in parallel, merge and re-rank."""
+
+    def _run_single(idx_query):
+        idx, (_text, qvec) = idx_query
+        result = graph_search(
+            seed_ids, qvec, graph_store, embed_cache, l0_lookup,
+            hops=hops, beam_width=beam_width, diverse=diverse,
+            mmr_lambda=mmr_lambda, edge_types=edge_types,
+        )
+        return idx, result
+
+    # Run all queries in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(queries)) as pool:
+        results = list(pool.map(_run_single, enumerate(queries)))
+
+    # Merge all hits from parallel searches
+    all_seeds: list[GraphHit] = []
+    all_neighbors: list[GraphHit] = []
+
+    for _idx, result in results:
+        all_seeds.extend(result.seeds)
+        all_neighbors.extend(result.neighbors)
+
+    # Dedup seeds and neighbors independently
+    merged_seeds = deduplicate_hits(all_seeds)
+    merged_neighbors = deduplicate_hits(all_neighbors)
+
+    # Apply use_case re-ranking boost
+    if use_case is not None and merged_neighbors:
+        uc_vecs = embed_cache.get_many([use_case])
+        uc_vec_raw = uc_vecs.get(use_case)
+        if uc_vec_raw is not None:
+            uc_vec = np.array(uc_vec_raw, dtype=np.float32)
+            uc_norm = np.linalg.norm(uc_vec)
+            if uc_norm > 1e-12:
+                uc_vec = uc_vec / uc_norm
+
+            neighbor_ids = [h.doc_id for h in merged_neighbors]
+            nvecs = embed_cache.get_many(neighbor_ids)
+
+            for hit in merged_neighbors:
+                nvec_raw = nvecs.get(hit.doc_id)
+                if nvec_raw is not None:
+                    nvec = np.array(nvec_raw, dtype=np.float32)
+                    n_norm = np.linalg.norm(nvec)
+                    if n_norm > 1e-12:
+                        nvec = nvec / n_norm
+                        sim = float(np.dot(uc_vec, nvec))
+                        sim = max(0.0, sim)
+                        hit.score *= 0.5 + 0.5 * sim
+
+            # Re-sort after boosting
+            merged_neighbors.sort(key=lambda h: h.score, reverse=True)
+
+    return GraphResult(seeds=merged_seeds, neighbors=merged_neighbors)

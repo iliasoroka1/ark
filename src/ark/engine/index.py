@@ -116,17 +116,20 @@ class Indexer:
             word_tokens = tokenize_text(body)
 
             result = embed_results[i]
-            if i == 0 and self._embed_cache is not None:
-                result.inspect(lambda vec: self._embed_cache.put(doc.id, doc.corpus, vec))
             embed_tokens = result.map(binarize_embedding).unwrap_or([])
             if result.is_err():
                 failed += 1
 
             if self._embed_cache is not None and result.is_ok():
                 raw_vec = result.unwrap()
+                # Dedup check — skip if very similar content already exists
+                # (exclude self by checking before caching)
                 sim = self._embed_cache.max_cosine_similarity(raw_vec, doc.corpus)
                 if sim >= DEDUP_THRESHOLD:
                     continue
+                # Cache embedding after dedup check passes
+                if i == 0:
+                    self._embed_cache.put(doc.id, doc.corpus, raw_vec)
 
             all_tokens = word_tokens + embed_tokens
 
