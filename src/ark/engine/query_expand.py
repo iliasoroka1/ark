@@ -17,9 +17,9 @@ import re
 log = logging.getLogger(__name__)
 
 _VAGUE_PATTERNS = re.compile(
-    r"\b(improve|improvement|handle|prevent|protect|manage|setup|configure|"
-    r"workflow|ceremony|practice|strategy|overview|timeline|recently|"
-    r"changed|changes)\b",
+    r"\b(improv|handl|prevent|protect|manag|setup|configur|"
+    r"workflow|ceremon|practice|strateg|overview|timeline|recent|"
+    r"chang)\w*\b",
     re.IGNORECASE,
 )
 
@@ -58,7 +58,7 @@ async def expand_query(query: str) -> str | None:
     """Expand a vague query into specific search terms via LLM.
 
     Returns expanded terms string, or None if expansion unavailable/failed.
-    Uses OpenRouter API with a cheap fast model.
+    Uses OpenRouter API with a cheap fast model (haiku).
     """
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
