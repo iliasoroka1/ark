@@ -26,6 +26,44 @@ def tokenize_text(text: str, max_len: int = 64) -> list[str]:
     ]
 
 
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "it", "that", "this", "was", "are",
+    "be", "has", "had", "have", "do", "does", "did", "not", "no", "so",
+    "if", "as", "we", "how", "what", "when", "where", "who", "which",
+    "our", "my", "your", "their", "its", "can", "will", "would", "should",
+    "could", "may", "up", "out", "all", "just", "also", "than", "then",
+    "into", "about", "after", "before", "between", "each", "more", "some",
+    "such", "any", "been", "being", "were", "they",
+})
+
+
+def pluralize_expand(tokens: list[str]) -> list[str]:
+    """Expand plural tokens with their singular form and remove stop words.
+
+    Only strips -s/-es/-ies suffixes. Does NOT add plural forms to avoid
+    false matches (e.g. "prevent" → "prevents" matching wrong documents).
+    Filters stop words to prevent noisy BM25 matches on "and", "the", etc.
+    """
+    expanded = []
+    for tok in tokens:
+        if tok in _STOP_WORDS:
+            continue
+        expanded.append(tok)
+        n = len(tok)
+        if n <= 3:
+            continue
+        if tok.endswith("ies") and n > 4:
+            expanded.append(tok[:-3] + "y")       # policies → policy
+        elif tok.endswith("ches") or tok.endswith("shes"):
+            expanded.append(tok[:-2])              # caches → cach, crashes → crash
+        elif tok.endswith("ses") or tok.endswith("xes") or tok.endswith("zes"):
+            expanded.append(tok[:-2])              # buses → bus
+        elif tok.endswith("s") and not tok.endswith("ss") and not tok.endswith("us"):
+            expanded.append(tok[:-1])              # bugs → bug, incidents → incident
+    return expanded
+
+
 @runtime_checkable
 class Chunker(Protocol):
     def chunks(self, text: str) -> list[str]: ...

@@ -150,7 +150,7 @@ def run_search(query: str) -> list[dict]:
     """Run ark search and return parsed results."""
     result = subprocess.run(
         ["uv", "run", "ark", "search", query],
-        capture_output=True, text=True, cwd="/Users/iliasoroka/ark"
+        capture_output=True, text=True, cwd="/tmp/ark-charlie"
     )
     if result.returncode != 0:
         print(f"  ERROR: '{query}': {result.stderr.strip()}")
