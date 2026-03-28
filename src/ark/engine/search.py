@@ -20,7 +20,9 @@ from ark.engine.types import SearchErr, SearchHit, SearchParams, SearchScores
 
 log = logging.getLogger(__name__)
 
-_RRF_K = 60.0
+_RRF_K = 15.0
+_EMBED_WEIGHT = 2.0
+_BM25_WEIGHT = 0.5
 _DECAY_FLOOR = 0.3
 _DECAY_HALFLIFE = 365.0
 _ACCESS_BOOST_CAP = 1.3
@@ -143,14 +145,14 @@ def _rrf_merge(embed_docs, bm25_docs, params, embed_cache=None):
         cid = _doc_field(doc, F_CHUNK_ID)
         if not cid:
             continue
-        rrf = 1.0 / (_RRF_K + rank + 1)
+        rrf = _EMBED_WEIGHT / (_RRF_K + rank + 1)
         scored[cid] = (SearchScores(rrf=rrf, embedding=raw_score, bm25=0.0), doc)
 
     for rank, (raw_score, doc) in enumerate(bm25_docs):
         cid = _doc_field(doc, F_CHUNK_ID)
         if not cid:
             continue
-        rrf = 1.0 / (_RRF_K + rank + 1)
+        rrf = _BM25_WEIGHT / (_RRF_K + rank + 1)
         if cid in scored:
             existing = scored[cid][0]
             merged = SearchScores(rrf=existing.rrf + rrf, embedding=existing.embedding, bm25=raw_score)
