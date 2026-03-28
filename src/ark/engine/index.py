@@ -28,6 +28,7 @@ F_CHUNK_ID = "chunk_id"
 F_ATTRIBUTES = "attributes"
 F_CHUNK_ATTRIBUTES = "chunk_attributes"
 F_CHUNK_TOKENS = "chunk_tokens"
+F_CHUNK_BODY = "chunk_body"
 F_FAILED_CHUNKS = "failed_chunks_count"
 F_CONTENT_HASH = "content_hash"
 
@@ -55,6 +56,8 @@ def build_schema() -> tantivy.Schema:
     b.add_unsigned_field(F_FAILED_CHUNKS, stored=True, indexed=True, fast=True)
     b.add_unsigned_field(F_CONTENT_HASH, stored=True, indexed=True, fast=True)
     b.add_text_field(F_CHUNK_TOKENS, stored=False, tokenizer_name="raw")
+    # Analyzed body field for proper BM25 with built-in stemming (en_stem: lowercase + Porter stemmer)
+    b.add_text_field(F_CHUNK_BODY, stored=False, tokenizer_name="en_stem")
     return b.build()
 
 
@@ -148,6 +151,7 @@ class Indexer:
             if doc.attributes:
                 chunk_doc.add_json(F_ATTRIBUTES, doc.attributes)
             chunk_doc.add_json(F_CHUNK_ATTRIBUTES, {"body": body})
+            chunk_doc.add_text(F_CHUNK_BODY, body)  # en_stem analyzed for BM25
             for tok in all_tokens:
                 chunk_doc.add_text(F_CHUNK_TOKENS, tok)
             self._writer.add_document(chunk_doc)

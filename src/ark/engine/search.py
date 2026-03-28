@@ -17,7 +17,7 @@ from ark.engine.result import Error, Ok, Result
 from ark.engine.embed import Embedding
 from ark.engine.embedding_cache import EmbeddingCache
 from ark.engine.index import (
-    F_ATTRIBUTES, F_CHUNK_ATTRIBUTES, F_CHUNK_ID,
+    F_ATTRIBUTES, F_CHUNK_ATTRIBUTES, F_CHUNK_BODY, F_CHUNK_ID,
     F_CHUNK_TOKENS, F_CORPUS, F_ID, F_SOURCE_ID,
 )
 from ark.engine.tokenizer import tokenize_text
@@ -34,58 +34,6 @@ _DECAY_FLOOR = 0.3
 _DECAY_HALFLIFE = 365.0
 _ACCESS_BOOST_CAP = 1.3
 _ACCESS_BOOST_STEP = 0.02
-
-
-_STOP_WORDS = frozenset({
-    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "is", "it", "that", "this", "was", "are",
-    "be", "has", "had", "have", "do", "does", "did", "not", "no", "so",
-    "if", "as", "we", "how", "what", "when", "where", "who", "which",
-    "our", "my", "your", "their", "its", "can", "will", "would", "should",
-    "could", "may", "up", "out", "all", "just", "also", "than", "then",
-    "into", "about", "after", "before", "between", "each", "more", "some",
-    "such", "any", "been", "being", "were", "they",
-})
-
-
-def _expand_query_tokens(tokens: list[str]) -> list[str]:
-    """Expand query tokens with morphological variants (light stemming).
-    Filters stop words to prevent noisy BM25 matches on 'and', 'the', etc."""
-    tokens = [t for t in tokens if t not in _STOP_WORDS]
-    expanded = list(tokens)
-    seen = set(tokens)
-    for tok in tokens:
-        variants = []
-        # Plural stripping
-        if tok.endswith("ies") and len(tok) > 4:
-            variants.append(tok[:-3] + "y")
-        elif tok.endswith("ses") or tok.endswith("xes") or tok.endswith("zes"):
-            variants.append(tok[:-2])
-        elif tok.endswith("shes") or tok.endswith("ches"):
-            variants.append(tok[:-2])
-        elif tok.endswith("s") and not tok.endswith("ss") and len(tok) > 3:
-            variants.append(tok[:-1])
-        # -ing removal
-        if tok.endswith("ing") and len(tok) > 5:
-            variants.append(tok[:-3])
-            variants.append(tok[:-3] + "e")
-        # -ed removal
-        if tok.endswith("ed") and len(tok) > 4:
-            variants.append(tok[:-2])
-            variants.append(tok[:-1])
-            if tok.endswith("ied"):
-                variants.append(tok[:-3] + "y")
-        # -tion/-ment
-        if tok.endswith("tion") and len(tok) > 5:
-            variants.append(tok[:-4] + "te")
-            variants.append(tok[:-4])
-        if tok.endswith("ment") and len(tok) > 5:
-            variants.append(tok[:-4])
-        for v in variants:
-            if v not in seen:
-                seen.add(v)
-                expanded.append(v)
-    return expanded
 
 
 class Searcher:
@@ -133,11 +81,11 @@ class Searcher:
         self._index.reload()
         searcher = self._index.searcher()
 
-        bm25_tokens = tokenize_text(query)
         bm25_docs: list[tuple[float, object]] = []
-        if bm25_tokens:
-            expanded = _expand_query_tokens(bm25_tokens)
-            bm25_query = self._build_bm25_query(expanded)
+        if query.strip():
+            # Use tantivy's en_stem QueryParser for native stemming.
+            # parse_query_lenient handles colons (field:value syntax) and apostrophes gracefully.
+            bm25_query, _errors = self._index.parse_query_lenient(query, [F_CHUNK_BODY])
             if corpus or source_ids:
                 bm25_query = self._wrap_filters(bm25_query, corpus, source_ids)
             bm25_results = searcher.search(bm25_query, limit=params.num_to_score)
