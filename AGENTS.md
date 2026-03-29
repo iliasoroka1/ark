@@ -106,31 +106,41 @@ This ingests 1173 docs: 23 engineering + 150 noise + 500 AG News + 500 tech news
 
 pplx-embed is the current baseline. LLM expansion via gemini-3.1-flash-lite adds ~14pp on top.
 
-## Current Benchmark Results (175 queries, 15 categories)
+## Current Benchmark Results (220 queries, 20 categories)
 
-Model: pplx-embed-v1-0.6b. Corpus: 63 engineering docs + 1150 noise = 1213 total.
+Model: pplx-embed-v1-0.6b. Corpus: 83 target docs + 1150 noise = 1233 total.
+Target docs: 23 core engineering + 20 infra/ops + 20 data/backend + 20 business/ops.
+Features: temporal hypergraph (period nodes + Gaussian proximity RRF signal).
 Env: `ARK_NO_DECAY=1`, no server running, isolated `ARK_HOME`.
 
 | Category | Queries | Hit@3 (no LLM) | Hit@3 (+LLM) | Notes |
 |----------|---------|----------------|--------------|-------|
-| Exact | 30 | ~100% | ~100% | verbatim phrases — inflated by easy new queries |
-| Paraphrase | 30 | ~80% | ~90% | rephrased concepts |
-| Adversarial | 20 | ~60% | ~70% | confusable docs — most honest signal |
-| Precision | 10 | 100% | 100% | specific detail retrieval |
+| Exact | 30 | 97% | 97% | verbatim phrases |
+| Paraphrase | 30 | 97% | 93% | rephrased concepts |
+| Precision | 20 | 95% | 95% | distinguish near-identical docs |
+| Conversational | 10 | 100% | 100% | vague human-like queries |
 | Needle | 5 | 100% | 100% | detail buried in long memory |
-| Conversational | 10 | 80% | 100% | vague human-like queries |
-| Synonym hell | 10 | 80% | 100% | zero lexical overlap |
-| Lexical traps | 10 | 70% | 90% | noise-overlapping terms |
-| Tangential | 10 | 50% | 80% | indirect — still targets original 23 docs only |
-| Multi-hop | 5 | 60% | 80% | chaining facts |
-| Compositional | 10 | 60% | 80% | combining 2+ memories |
-| Cross-domain | 10 | 60% | 80% | connecting different domains |
-| Negation | 5 | 40% | 60% | "X besides Y" |
-| Temporal | 10 | 20% | 50% | date reasoning not supported |
+| Adversarial | 20 | 80% | 85% | confusable docs + noise overlap |
+| Biz exact | 5 | 0% | 100% | business language — needs LLM bridge |
+| Biz paraphrase | 5 | 0% | 100% | technical rephrasing of business docs |
+| Biz cross-domain | 5 | 60% | 100% | connecting business + engineering |
+| Biz temporal | 2 | 0% | 100% | business docs with dates |
+| Biz adversarial | 3 | 0% | 67% | business vs noise overlap |
+| Synonym hell | 10 | 60% | 100% | zero lexical overlap |
+| Compositional | 10 | 50% | 70% | combining 2+ memories |
+| Cross-domain | 15 | 47% | 67% | connecting different domains |
+| Temporal | 15 | 47% | 60% | date-aware search (hypergraph + Gaussian) |
+| Multi-hop | 5 | 60% | 60% | chaining facts |
+| Lexical traps | 10 | 60% | 60% | query words match noise more |
+| Tangential | 10 | 40% | 50% | indirect/abstract queries |
+| Negation | 5 | 20% | 20% | exclusion logic not supported |
 | Negative | 5 | 0% FP | 0% FP | correctly returns nothing |
-| **OVERALL** | **175** | **74.3%** | **85.7%** | MRR: 0.657 / 0.725 |
+| **OVERALL** | **215** | **75.8%** | **82.8%** | MRR: 0.679 / 0.716 |
 
-**Caveat**: Exact/Paraphrase for new docs use unique technical strings (version numbers, config values) that are easy for embedding alone. Adversarial category is the most honest signal. Tangential/compositional/multi-hop/cross-domain still only target the original 23 docs — TODO: expand these to cover new 40 docs.
+**Key findings:**
+- Business docs (non-technical language) score 0% without LLM expansion, 100% with — this is the strongest evidence that LLM expansion genuinely bridges vocabulary gaps.
+- Temporal hypergraph improved temporal from 50% → 60% (+LLM) by injecting date-matched docs into candidate pool.
+- Original categories (tangential, lexical traps) dropped vs earlier benchmarks — the 83-doc corpus is genuinely harder.
 
 ## What Doesn't Work (Lessons Learned)
 

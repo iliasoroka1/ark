@@ -4,7 +4,7 @@ Clears old embeddings.db and tantivy index, then re-ingests all memories
 with the configured embedding provider (default: fastembed nomic; set
 OPENROUTER_EMBED_MODEL + OPENROUTER_API_KEY for pplx-embed).
 
-Total corpus: 63 engineering docs (23 core + 20 infra + 20 data) + 1150 noise.
+Total corpus: 83 engineering/business docs (23 core + 20 infra + 20 data + 20 business/ops) + 1150 noise.
 """
 import asyncio
 import hashlib
@@ -88,20 +88,60 @@ ENGINEERING_DATA = [
 ]
 
 
+BUSINESS_OPS = [
+    # Product decisions
+    'Product team decided to sunset the legacy checkout flow on 2026-04-15 after conversion rate analysis showed the new single-page checkout converts 12% better.',
+    'Roadmap update from Sarah: we are prioritizing mobile app push notifications for Q2 2026 because 60% of our active users are on mobile and engagement drops without re-engagement.',
+    'Feature flag for the new recommendation carousel was turned on for 20% of users on 2026-02-10. Early results show a 3% uplift in average order value.',
+    'Decision to deprecate API v1 for external partners communicated to all enterprise clients on 2026-01-20 with a 6-month migration window ending 2026-06-01.',
+    # Customer incidents/complaints
+    'Customer complaint from Acme Corp (ticket #4891): checkout keeps timing out for their European office users since Tuesday, affecting about 200 orders per day.',
+    'Support escalation: multiple customers reporting that login is failing intermittently since the Tuesday morning release. Customer success team flagged it as P1.',
+    'Enterprise client BigRetail reported that their bulk order import has been failing silently since 2026-03-05. Their operations team lost 3 days of inventory data.',
+    'NPS survey feedback summary for February 2026: score dropped from 42 to 31. Top complaint is page load times on product listings, mentioned by 38% of detractors.',
+    # Meeting notes
+    'Sprint retro notes 2026-03-15: team agreed deployment process is too slow, CI pipeline takes over 8 minutes. Action item for platform team to investigate build caching.',
+    'Architecture review meeting 2026-02-20: decision to move payment processing to its own dedicated database to isolate failures. Migration planned for Q2.',
+    'Security audit findings from 2026-01-25: auditors flagged that service-to-service communication is not encrypted in 3 internal services. Remediation deadline is end of March.',
+    'Quarterly business review 2026-03-20: CEO asked why the payments outage on March 12 was not detected earlier. VP Engineering committed to improving monitoring coverage.',
+    # Business metrics
+    'Conversion rate dropped 8% on 2026-03-13, the day after the payments infrastructure incident. Revenue impact estimated at $45K for that day alone.',
+    'Latency SLA breach reported for March 2026: payment processing p95 exceeded the 500ms target on 4 separate days, triggering a contractual review with BigRetail.',
+    'Monthly active users grew 15% in February 2026 after the launch of the referral program, but server costs increased 22% due to unexpected load on the recommendation engine.',
+    # Hiring/team
+    'Hired Maria Chen as Senior SRE starting 2026-04-01, specifically to improve observability and reduce mean time to detection for production incidents.',
+    'Data platform team expanded from 3 to 5 engineers in January 2026 to handle the growing pipeline complexity and reduce the backlog of data quality issues.',
+    # Vendor decisions
+    'Vendor decision memo: chose Datadog over New Relic for monitoring because of better Kubernetes integration and lower per-host pricing at our scale (47 services).',
+    # Compliance/legal
+    'GDPR audit scheduled for 2026-05-01. Legal team requires all services to implement data retention policies by end of April. Customer data older than 2 years must be anonymized.',
+    'SOC2 Type II preparation: compliance team identified 5 control gaps including lack of automated access reviews and missing audit trail for database schema changes.',
+]
+
+
 async def main():
     ark_home = os.environ.get("ARK_HOME", os.path.expanduser("~/.ark"))
     memory_dir = os.path.join(ark_home, "memory")
 
-    # Clear old data — tantivy index, embedding cache, and graph
-    print("Clearing old index, embeddings, and graph...")
+    # Preserve embedding cache as warm cache (skip re-embedding existing docs)
+    embed_db_path = os.path.join(memory_dir, "embeddings.db")
+    warm_cache_path = os.path.join(ark_home, "_embeddings_warm.db")
+    if os.path.exists(embed_db_path):
+        shutil.copy2(embed_db_path, warm_cache_path)
+        import sqlite3
+        n = sqlite3.connect(warm_cache_path).execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+        print(f"  Saved warm cache: {n} embeddings")
+
+    # Clear tantivy + graph (rebuild from scratch)
+    print("Clearing old index and graph...")
     if os.path.exists(memory_dir):
         shutil.rmtree(memory_dir)
     os.makedirs(memory_dir, exist_ok=True)
-    for db_file in ["embeddings.db", "graph.db"]:
-        p = os.path.join(ark_home, db_file)
-        if os.path.exists(p):
-            os.remove(p)
-            print(f"  Removed {db_file}")
+
+    # Restore warm cache
+    if os.path.exists(warm_cache_path):
+        shutil.move(warm_cache_path, embed_db_path)
+        print("  Restored warm embedding cache")
 
     # Force re-init with new model
     import ark.local as local
@@ -111,57 +151,39 @@ async def main():
     local._graph_store = None
 
     from ark.local import call_tool
+    import time
 
-    # Ingest engineering memories
-    print(f"Ingesting {len(ENGINEERING)} engineering memories...")
-    for i, text in enumerate(ENGINEERING):
-        await call_tool('ingest', {'content': text})
-        if (i + 1) % 10 == 0:
-            print(f"  [{i+1}/{len(ENGINEERING)}]")
-
-    # Ingest infra/ops engineering memories
-    print(f"Ingesting {len(ENGINEERING_INFRA)} infra/ops memories...")
-    for i, text in enumerate(ENGINEERING_INFRA):
-        await call_tool('ingest', {'content': text})
-        if (i + 1) % 10 == 0:
-            print(f"  [{i+1}/{len(ENGINEERING_INFRA)}]")
-
-    # Ingest data/backend engineering memories
-    print(f"Ingesting {len(ENGINEERING_DATA)} data/backend memories...")
-    for i, text in enumerate(ENGINEERING_DATA):
-        await call_tool('ingest', {'content': text})
-        if (i + 1) % 10 == 0:
-            print(f"  [{i+1}/{len(ENGINEERING_DATA)}]")
-
-    # Ingest noise from seed_noise.py
-    print("Ingesting 150 noise memories...")
+    # Collect all doc lists
     from seed_noise import NOISE
-    for i, text in enumerate(NOISE):
-        await call_tool('ingest', {'content': text})
-        if (i + 1) % 50 == 0:
-            print(f"  [{i+1}/{len(NOISE)}]")
-
-    # Ingest AG News noise
-    print("Ingesting 500 AG News memories...")
     with open('ag_news_noise.json') as f:
         ag_news = json.load(f)
-    for i, text in enumerate(ag_news):
-        await call_tool('ingest', {'content': text})
-        if (i + 1) % 100 == 0:
-            print(f"  [{i+1}/{len(ag_news)}]")
-
-    # Ingest tech news noise
-    print("Ingesting 500 tech news memories...")
     with open('tech_noise.json') as f:
         tech_news = json.load(f)
-    for i, text in enumerate(tech_news):
-        await call_tool('ingest', {'content': text})
-        if (i + 1) % 100 == 0:
-            print(f"  [{i+1}/{len(tech_news)}]")
 
-    total = len(ENGINEERING) + len(ENGINEERING_INFRA) + len(ENGINEERING_DATA) + len(NOISE) + len(ag_news) + len(tech_news)
-    n_eng = len(ENGINEERING) + len(ENGINEERING_INFRA) + len(ENGINEERING_DATA)
-    print(f"\nDone: {total} memories ingested ({n_eng} engineering + {len(NOISE)+len(ag_news)+len(tech_news)} noise)")
+    groups = [
+        ("engineering", ENGINEERING),
+        ("infra/ops", ENGINEERING_INFRA),
+        ("data/backend", ENGINEERING_DATA),
+        ("business/ops", BUSINESS_OPS),
+        ("noise", NOISE),
+        ("AG News", ag_news),
+        ("tech news", tech_news),
+    ]
+
+    t0 = time.time()
+    total = 0
+    for label, texts in groups:
+        print(f"Ingesting {len(texts)} {label} memories...")
+        for i, text in enumerate(texts):
+            await call_tool('ingest', {'content': text})
+            if (i + 1) % 100 == 0:
+                elapsed = time.time() - t0
+                print(f"  [{i+1}/{len(texts)}] ({elapsed:.0f}s elapsed)")
+        total += len(texts)
+
+    n_eng = len(ENGINEERING) + len(ENGINEERING_INFRA) + len(ENGINEERING_DATA) + len(BUSINESS_OPS)
+    elapsed = time.time() - t0
+    print(f"\nDone: {total} memories ingested ({n_eng} engineering + {total - n_eng} noise) in {elapsed:.0f}s")
 
     # Verify
     r = await call_tool('search', {'query': 'JWT tokens'})

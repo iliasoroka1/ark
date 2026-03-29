@@ -1,10 +1,11 @@
 """Brutal recall benchmark for ark memory search.
 
-~1213 docs: 63 engineering + 150 general noise + 500 AG News + 500 tech news.
+~1233 docs: 83 engineering/business + 150 general noise + 500 AG News + 500 tech news.
   - 23 core engineering (auth, infra, DB, API, process)
   - 20 infra/ops (k8s, terraform, CI/CD, vault, istio, observability)
   - 20 data/backend (kafka, airflow, dbt, ML, snowflake, celery, data quality)
-180 queries across 15 categories.
+  - 20 business/ops (product, customer incidents, meetings, metrics, hiring, vendor, compliance)
+200 queries across 15 categories + business.
 
 Categories:
   1. Exact (10) — verbatim phrases
@@ -107,6 +108,27 @@ _ID_FINGERPRINTS: dict[str, str] = {
     "e4092b70c7250af5": "revenue_reconciliation backfill 2026-01-01 2026-02-28 59 dag runs",
     "2a5e787a369bca1a": "clickstream kafka 24 partitions 3 days retention analytics-platform",
     "788542a9fa58bd2f": "fraud-model-v3 shadow mode fraud_shadow_log auc 0.94",
+    # business/ops docs
+    "d48e245e50dcef49": "sunset legacy checkout flow single-page checkout converts 12%",
+    "c88dc3396b0254f8": "roadmap mobile push notifications q2 2026 60% mobile users",
+    "fb65619230c2cdf6": "recommendation carousel feature flag 20% users 3% uplift aov",
+    "046c26ef72094936": "deprecate api v1 external partners 6-month migration 2026-06-01",
+    "9611b9ee15e10bb2": "acme corp checkout timing out european users 200 orders",
+    "07656c9b1cf570ed": "login failing intermittently tuesday release customer success p1",
+    "7f4181b3a165605c": "bigretail bulk order import failing silently 2026-03-05 inventory",
+    "6d47a494e4b79e78": "nps dropped 42 to 31 february page load times product listings",
+    "9210eec4581c224b": "sprint retro deployment slow ci pipeline 8 minutes build caching",
+    "7df08e8cad10bf42": "architecture review payment processing own database isolate failures q2",
+    "757a5f58da5e7ab4": "security audit service-to-service not encrypted 3 services march",
+    "b70fe95367719bcd": "qbr ceo payments outage march 12 monitoring coverage",
+    "ad0e30b2f2b52a53": "conversion rate dropped 8% 2026-03-13 payments incident $45k revenue",
+    "96a8bb70b3be9243": "latency sla breach march payment p95 500ms bigretail contractual",
+    "9c54ee59e47380f1": "mau grew 15% february referral program server costs 22% recommendation",
+    "b74b468527867ab4": "hired maria chen sre observability mean time detection incidents",
+    "a301035ca4a1e7b5": "data platform team expanded 3 to 5 january pipeline data quality",
+    "38a8fd548af893fe": "chose datadog over new relic kubernetes integration per-host pricing",
+    "508aca21f29c0584": "gdpr audit 2026-05-01 data retention anonymize customer data 2 years",
+    "e307d34c1f7e6520": "soc2 type ii 5 control gaps access reviews audit trail schema changes",
 }
 
 # Short aliases
@@ -177,6 +199,28 @@ FIVETRAN_CUSTOMER = "e912ea6bbf7e7992"
 AIRFLOW_BACKFILL  = "e4092b70c7250af5"
 KAFKA_CLICKSTREAM = "2a5e787a369bca1a"
 FRAUD_SHADOW      = "788542a9fa58bd2f"
+
+# business/ops aliases
+BIZ_CHECKOUT_SUNSET = "d48e245e50dcef49"
+BIZ_MOBILE_ROADMAP  = "c88dc3396b0254f8"
+BIZ_REC_CAROUSEL    = "fb65619230c2cdf6"
+BIZ_APIV1_DEPREC    = "046c26ef72094936"
+BIZ_ACME_TIMEOUT    = "9611b9ee15e10bb2"
+BIZ_LOGIN_FAILING   = "07656c9b1cf570ed"
+BIZ_BIGRETAIL_IMPORT = "7f4181b3a165605c"
+BIZ_NPS_DROP        = "6d47a494e4b79e78"
+BIZ_RETRO           = "9210eec4581c224b"
+BIZ_ARCH_REVIEW     = "7df08e8cad10bf42"
+BIZ_SECURITY_AUDIT  = "757a5f58da5e7ab4"
+BIZ_QBR             = "b70fe95367719bcd"
+BIZ_CONVERSION_DROP = "ad0e30b2f2b52a53"
+BIZ_SLA_BREACH      = "96a8bb70b3be9243"
+BIZ_MAU_GROWTH      = "9c54ee59e47380f1"
+BIZ_HIRE_SRE        = "b74b468527867ab4"
+BIZ_DATA_TEAM       = "a301035ca4a1e7b5"
+BIZ_VENDOR_DATADOG  = "38a8fd548af893fe"
+BIZ_GDPR            = "508aca21f29c0584"
+BIZ_SOC2            = "e307d34c1f7e6520"
 
 # ── Queries ──
 
@@ -404,6 +448,22 @@ TEMPORAL = [
     TestQuery("what was set up before the outage", "temporal",
               [REPLICATION, MIGRATION, INDEX],
               "replication + migration + index all before 2026-03-12"),
+    # Temporal queries for new docs — test hypergraph period node injection
+    TestQuery("January 2026 security changes", "temporal",
+              [MFA, SEALED_SECRETS],
+              "MFA 2026-01-10 + Sealed Secrets key rotated 2026-01-15"),
+    TestQuery("what happened in February 2026", "temporal",
+              [MIGRATION, REPLICATION, SECRET_ROTATION],
+              "migration 2026-02-18 + replication tested 2026-02-25 + rotation 2026-02-01"),
+    TestQuery("Q1 2026 infrastructure changes", "temporal",
+              [MFA, SEALED_SECRETS, SECRET_ROTATION, MIGRATION, REPLICATION, CODEREVIEW, INCIDENT],
+              "all docs with dates in Jan-Mar 2026"),
+    TestQuery("March 2026 policy and process updates", "temporal",
+              [CODEREVIEW, INCIDENT],
+              "code review policy 2026-03-01 + incident postmortem 2026-03-12"),
+    TestQuery("data pipeline changes in early 2026", "temporal",
+              [AIRFLOW_ETL, AIRFLOW_BACKFILL],
+              "etl DAG has 2026-01-01 backfill range + revenue backfill 2026-01-01 to 2026-02-28"),
 ]
 
 # 10. Conversational — messy, vague, human-like phrasing
@@ -627,10 +687,79 @@ NEEDLE = [
               "specific detail: v1 sunset 2026-06-01"),
 ]
 
+# ── Business/ops queries ──
+
+BIZ_EXACT = [
+    TestQuery("checkout keeps timing out for European office users", "biz_exact", [BIZ_ACME_TIMEOUT]),
+    TestQuery("NPS score dropped from 42 to 31 in February", "biz_exact", [BIZ_NPS_DROP]),
+    TestQuery("chose Datadog over New Relic for monitoring", "biz_exact", [BIZ_VENDOR_DATADOG]),
+    TestQuery("GDPR audit scheduled for 2026-05-01", "biz_exact", [BIZ_GDPR]),
+    TestQuery("sprint retro: CI pipeline takes over 8 minutes", "biz_exact", [BIZ_RETRO]),
+]
+
+BIZ_PARAPHRASE = [
+    TestQuery("why are European customers having trouble placing orders", "biz_paraphrase",
+              [BIZ_ACME_TIMEOUT],
+              "business language for checkout timeout — maps to Redis cache TTL issue"),
+    TestQuery("which monitoring vendor did we pick and why", "biz_paraphrase",
+              [BIZ_VENDOR_DATADOG],
+              "rephrased vendor decision"),
+    TestQuery("what compliance certifications are we working toward", "biz_paraphrase",
+              [BIZ_SOC2, BIZ_GDPR],
+              "paraphrase of SOC2 + GDPR prep"),
+    TestQuery("what happened to our customer satisfaction scores recently", "biz_paraphrase",
+              [BIZ_NPS_DROP],
+              "NPS drop rephrased"),
+    TestQuery("are we hiring for reliability engineering", "biz_paraphrase",
+              [BIZ_HIRE_SRE],
+              "SRE hire rephrased in business terms"),
+]
+
+BIZ_CROSS_DOMAIN = [
+    TestQuery("what caused the checkout complaints from European customers", "biz_cross_domain",
+              [BIZ_ACME_TIMEOUT, REDIS],
+              "business complaint + engineering root cause: Redis TTL for EU traffic"),
+    TestQuery("what was the business impact of the March 12 payments outage", "biz_cross_domain",
+              [BIZ_CONVERSION_DROP, BIZ_QBR, INCIDENT],
+              "revenue drop + CEO review + engineering postmortem"),
+    TestQuery("why did our build times get flagged and what can we do about it", "biz_cross_domain",
+              [BIZ_RETRO, GH_ACTIONS_CI, BUILD_CACHE],
+              "sprint retro complaint + CI pipeline config + build cache setup"),
+    TestQuery("what security gaps did auditors find and are we already fixing them", "biz_cross_domain",
+              [BIZ_SECURITY_AUDIT, ISTIO_MTLS, BIZ_SOC2],
+              "audit findings + Istio mTLS already deployed + SOC2 gaps"),
+    TestQuery("login issues reported by customers and the technical root cause", "biz_cross_domain",
+              [BIZ_LOGIN_FAILING, BUG],
+              "customer complaint about login + engineering JWT refresh bug"),
+]
+
+BIZ_ADVERSARIAL = [
+    TestQuery("customer complaints about website performance", "biz_adversarial",
+              [BIZ_NPS_DROP, BIZ_ACME_TIMEOUT, BIZ_SLA_BREACH],
+              "'website performance' matches tons of generic tech noise"),
+    TestQuery("business impact of infrastructure decisions", "biz_adversarial",
+              [BIZ_CONVERSION_DROP, BIZ_MAU_GROWTH, BIZ_VENDOR_DATADOG],
+              "'business impact' + 'infrastructure' both noisy terms"),
+    TestQuery("compliance requirements for data handling", "biz_adversarial",
+              [BIZ_GDPR, BIZ_SOC2],
+              "'compliance' and 'data handling' match regulatory news"),
+]
+
+BIZ_TEMPORAL = [
+    TestQuery("business events in March 2026", "biz_temporal",
+              [BIZ_RETRO, BIZ_QBR, BIZ_CONVERSION_DROP, BIZ_SLA_BREACH, BIZ_SECURITY_AUDIT, BIZ_BIGRETAIL_IMPORT],
+              "sprint retro 3/15 + QBR 3/20 + conversion drop 3/13 + SLA breach March + audit remediation March + BigRetail 3/5"),
+    TestQuery("what changed in January 2026 from a business perspective", "biz_temporal",
+              [BIZ_APIV1_DEPREC, BIZ_SECURITY_AUDIT, BIZ_DATA_TEAM],
+              "API v1 deprecation notice 1/20 + security audit 1/25 + data team expansion January"),
+]
+
 ALL_QUERIES = (EXACT + PARAPHRASE + TANGENTIAL + ADVERSARIAL + NEGATIVE +
                MULTIHOP + LEXICAL_TRAPS + COMPOSITIONAL +
                TEMPORAL + CONVERSATIONAL + SYNONYM_HELL + PRECISION +
-               NEGATION + CROSS_DOMAIN + NEEDLE)
+               NEGATION + CROSS_DOMAIN + NEEDLE +
+               BIZ_EXACT + BIZ_PARAPHRASE + BIZ_CROSS_DOMAIN +
+               BIZ_ADVERSARIAL + BIZ_TEMPORAL)
 
 
 def run_search(query: str) -> list[dict]:
@@ -731,6 +860,9 @@ def main():
         ("Synonym hell", SYNONYM_HELL), ("Precision", PRECISION),
         ("Negation", NEGATION), ("Cross-domain", CROSS_DOMAIN),
         ("Needle", NEEDLE),
+        ("Biz exact", BIZ_EXACT), ("Biz paraphrase", BIZ_PARAPHRASE),
+        ("Biz cross-domain", BIZ_CROSS_DOMAIN), ("Biz adversarial", BIZ_ADVERSARIAL),
+        ("Biz temporal", BIZ_TEMPORAL),
     ]
     total = len(ALL_QUERIES)
     n_positive = sum(1 for q in ALL_QUERIES if not q.is_negative)
