@@ -113,7 +113,11 @@ _dec_error = msgspec.json.Decoder(_EmbeddingErrorWrapper)
 
 
 class OpenRouterEmbedding:
-    """Embedding via OpenRouter API (supports Perplexity, BGE, etc.)."""
+    """Embedding via OpenRouter API (supports Perplexity, BGE, etc.).
+
+    Supports batch embedding: pass a list of texts to embed_batch() for
+    efficient single-request processing instead of one call per text.
+    """
     __slots__ = ("_model", "_dims", "_api_key")
 
     def __init__(self, model: str, api_key: str, dims: int = 1024) -> None:
@@ -125,7 +129,8 @@ class OpenRouterEmbedding:
     def dims(self) -> int:
         return self._dims
 
-    async def embed(self, text: str) -> Result[list[float], IndexErr]:
+    async def _call_api(self, input_data) -> Result[list[list[float]], IndexErr]:
+        """Call OpenRouter embeddings API. input_data can be str or list[str]."""
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -134,8 +139,8 @@ class OpenRouterEmbedding:
                         "Authorization": f"Bearer {self._api_key}",
                         "Content-Type": "application/json",
                     },
-                    json={"model": self._model, "input": text},
-                    timeout=aiohttp.ClientTimeout(total=15),
+                    json={"model": self._model, "input": input_data},
+                    timeout=aiohttp.ClientTimeout(total=60),
                 ) as resp:
                     raw = await resp.read()
                     if resp.status != 200:
@@ -147,15 +152,36 @@ class OpenRouterEmbedding:
                     parsed = _dec_response.decode(raw)
                     if not parsed.data:
                         return Error(IndexErr(code="empty", message="No embeddings returned"))
-                    vec = parsed.data[0].embedding
-                    if self._dims and len(vec) != self._dims:
-                        self._dims = len(vec)
-                    return Ok(vec)
+                    vecs = [d.embedding for d in parsed.data]
+                    if vecs and self._dims != len(vecs[0]):
+                        self._dims = len(vecs[0])
+                    return Ok(vecs)
         except Exception as e:
             return Error(IndexErr(code="embed_error", message=str(e)))
 
+    async def embed(self, text: str) -> Result[list[float], IndexErr]:
+        result = await self._call_api(text)
+        match result:
+            case Ok(vecs):
+                return Ok(vecs[0])
+            case Error(err):
+                return Error(err)
+
     async def embed_document(self, text: str) -> Result[list[float], IndexErr]:
         return await self.embed(text)
+
+    async def embed_batch_texts(self, texts: list[str], batch_size: int = 64) -> list[Result[list[float], IndexErr]]:
+        """Embed multiple texts in batched API calls. Much faster than one-by-one."""
+        results: list[Result[list[float], IndexErr]] = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            batch_result = await self._call_api(batch)
+            match batch_result:
+                case Ok(vecs):
+                    results.extend(Ok(v) for v in vecs)
+                case Error(err):
+                    results.extend(Error(err) for _ in batch)
+        return results
 
 
 class CatsuEmbedding:
