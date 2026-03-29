@@ -28,13 +28,15 @@ Key files:
 ## Running Benchmarks
 
 ```bash
-# Deterministic baseline (no temporal decay drift)
-ARK_NO_DECAY=1 uv run python test_recall_brutal.py
+# Baseline: pplx-embed, no LLM expansion
+OPENROUTER_EMBED_MODEL=perplexity/pplx-embed-v1-0.6b \
+OPENROUTER_API_KEY=<key> \
+ARK_HOME=/tmp/ark-pplx-test \
+ARK_NO_DECAY=1 \
+ARK_NO_LLM_EXPAND=1 \
+uv run python test_recall_brutal.py
 
-# With LLM expansion
-OPENROUTER_API_KEY=<key> ARK_NO_DECAY=1 uv run python test_recall_brutal.py
-
-# With pplx-embed (best model)
+# Best config: pplx-embed + LLM expansion
 OPENROUTER_EMBED_MODEL=perplexity/pplx-embed-v1-0.6b \
 OPENROUTER_API_KEY=<key> \
 ARK_HOME=/tmp/ark-pplx-test \
@@ -42,10 +44,18 @@ ARK_NO_DECAY=1 \
 uv run python test_recall_brutal.py
 
 # Verbose (see which queries miss)
-ARK_NO_DECAY=1 uv run python test_recall_brutal.py -v
+OPENROUTER_EMBED_MODEL=perplexity/pplx-embed-v1-0.6b \
+OPENROUTER_API_KEY=<key> \
+ARK_HOME=/tmp/ark-pplx-test \
+ARK_NO_DECAY=1 \
+uv run python test_recall_brutal.py -v
 ```
 
 Always use `ARK_NO_DECAY=1` for benchmarks. Without it, results drift ~2-5pp between runs due to `datetime.now()` in temporal decay.
+
+**IMPORTANT: kill any running `ark serve` before benchmarking.** The CLI falls back to local engine when no server is reachable — if a server is running at `localhost:7070`, the benchmark hits it instead of your `ARK_HOME` index. Run `pkill -f "ark serve"` first.
+
+**IMPORTANT: parallel benchmarks need separate `ARK_HOME`.** Two processes can't share the same tantivy index (writer lock conflict). Copy the index: `cp -r /tmp/ark-pplx-test /tmp/ark-pplx-nollm`.
 
 ## Working in Parallel (Multiple Agents)
 
@@ -63,7 +73,7 @@ ARK_HOME=/tmp/ark-<agent-name>-test uv run python reembed.py
 ARK_HOME=/tmp/ark-<agent-name>-test uv run python test_recall_brutal.py
 ```
 
-Never modify `~/.ark` while another agent is running benchmarks. The shared index at `~/.ark` is the baseline (nomic 768D, 1171 docs).
+Never share an index between concurrent benchmark runs (writer lock conflict). The canonical pplx baseline index lives at `/tmp/ark-pplx-test` (pplx-embed-v1-0.6b, 1024D, 1173 docs). Copy it for each parallel run.
 
 ### Rule 3: Fix test cwd when using worktrees
 Test files hardcode `cwd="/Users/iliasoroka/ark"`. After copying to worktree:
@@ -87,37 +97,40 @@ This ingests 1173 docs: 23 engineering + 150 noise + 500 AG News + 500 tech news
 
 ## Embedding Models
 
-| Model | Type | Dims | Hit@3 | How to use |
-|-------|------|------|-------|------------|
-| pplx-embed-v1-0.6b | API | 1024 | 84.8%* | `OPENROUTER_EMBED_MODEL=perplexity/pplx-embed-v1-0.6b` |
-| BGE-large-en-v1.5 | local | 1024 | 71.2% | `FASTEMBED_MODEL=BAAI/bge-large-en-v1.5` |
-| BGE-base-en-v1.5 | local | 768 | 69.6% | `FASTEMBED_MODEL=BAAI/bge-base-en-v1.5` |
-| Nomic v1.5 | local | 768 | 64.8% | default (no env var) |
+| Model | Type | Dims | Hit@3 (no LLM) | Hit@3 (+LLM) | How to use |
+|-------|------|------|----------------|--------------|------------|
+| pplx-embed-v1-0.6b | API | 1024 | **74.3%** | **85.7%** | `OPENROUTER_EMBED_MODEL=perplexity/pplx-embed-v1-0.6b` |
+| BGE-large-en-v1.5 | local | 1024 | 71.2% | — | `FASTEMBED_MODEL=BAAI/bge-large-en-v1.5` |
+| BGE-base-en-v1.5 | local | 768 | 69.6% | — | `FASTEMBED_MODEL=BAAI/bge-base-en-v1.5` |
+| Nomic v1.5 | local | 768 | 64.8% | — | default fastembed fallback |
 
-*with LLM expansion via gemini-3.1-flash-lite
+pplx-embed is the current baseline. LLM expansion via gemini-3.1-flash-lite adds ~14pp on top.
 
-## Current Benchmark Results (130 queries, 15 categories)
+## Current Benchmark Results (175 queries, 15 categories)
 
-Best config: pplx-embed-v1-0.6b + gemini-3.1-flash-lite LLM expansion
+Model: pplx-embed-v1-0.6b. Corpus: 63 engineering docs + 1150 noise = 1213 total.
+Env: `ARK_NO_DECAY=1`, no server running, isolated `ARK_HOME`.
 
-| Category | Queries | Hit@3 | Notes |
-|----------|---------|-------|-------|
-| Exact | 10 | 100% | verbatim phrases |
-| Precision | 10 | 100% | specific detail retrieval |
-| Needle | 5 | 100% | detail buried in long memory |
-| Conversational | 10 | 100% | vague human-like queries |
-| Synonym hell | 10 | 100% | zero lexical overlap |
-| Paraphrase | 10 | 90% | rephrased concepts |
-| Lexical traps | 10 | 90% | noise-overlapping terms |
-| Tangential | 10 | 80% | indirect queries |
-| Multi-hop | 5 | 80% | chaining facts |
-| Compositional | 10 | 80% | combining 2+ memories |
-| Cross-domain | 10 | 80% | connecting different domains |
-| Adversarial | 10 | 70% | generic noise vs our docs |
-| Negation | 5 | 60% | "X besides Y" |
-| Temporal | 10 | 50% | date-specific queries |
-| Negative | 5 | 0% FP | correctly returns nothing |
-| **OVERALL** | **125** | **84.8%** | |
+| Category | Queries | Hit@3 (no LLM) | Hit@3 (+LLM) | Notes |
+|----------|---------|----------------|--------------|-------|
+| Exact | 30 | ~100% | ~100% | verbatim phrases — inflated by easy new queries |
+| Paraphrase | 30 | ~80% | ~90% | rephrased concepts |
+| Adversarial | 20 | ~60% | ~70% | confusable docs — most honest signal |
+| Precision | 10 | 100% | 100% | specific detail retrieval |
+| Needle | 5 | 100% | 100% | detail buried in long memory |
+| Conversational | 10 | 80% | 100% | vague human-like queries |
+| Synonym hell | 10 | 80% | 100% | zero lexical overlap |
+| Lexical traps | 10 | 70% | 90% | noise-overlapping terms |
+| Tangential | 10 | 50% | 80% | indirect — still targets original 23 docs only |
+| Multi-hop | 5 | 60% | 80% | chaining facts |
+| Compositional | 10 | 60% | 80% | combining 2+ memories |
+| Cross-domain | 10 | 60% | 80% | connecting different domains |
+| Negation | 5 | 40% | 60% | "X besides Y" |
+| Temporal | 10 | 20% | 50% | date reasoning not supported |
+| Negative | 5 | 0% FP | 0% FP | correctly returns nothing |
+| **OVERALL** | **175** | **74.3%** | **85.7%** | MRR: 0.657 / 0.725 |
+
+**Caveat**: Exact/Paraphrase for new docs use unique technical strings (version numbers, config values) that are easy for embedding alone. Adversarial category is the most honest signal. Tangential/compositional/multi-hop/cross-domain still only target the original 23 docs — TODO: expand these to cover new 40 docs.
 
 ## What Doesn't Work (Lessons Learned)
 
@@ -135,7 +148,23 @@ Best config: pplx-embed-v1-0.6b + gemini-3.1-flash-lite LLM expansion
 4. **Better embedding models** — pplx-embed-v1-0.6b >> BGE >> nomic for retrieval.
 5. **ARK_NO_DECAY** — essential for deterministic benchmarking.
 
+## Benchmark Validity / Overfitting Concerns
+
+Be skeptical of the headline numbers. Known issues:
+
+1. **No train/test split** — all pipeline parameters (PRF top-k, RRF weights, `should_expand` heuristic, LLM prompt examples) were tuned by running against the same 130 queries. The benchmark is the dev set.
+
+2. **Oracle query crafting** — queries were written by the same person who wrote the documents. Real users don't know the exact phrasing in the corpus. The queries are unnaturally well-matched.
+
+3. **Only 23 target documents** — with 23 targets, random retrieval hits ~13% of queries by chance at Hit@3. Real production corpora have hundreds of relevant documents, all confusable with each other. **Fix in progress**: expanding to 60+ target docs across infra, data, and backend domains (branches `improve/infra-docs`, `improve/data-docs`).
+
+4. **Fixed noise corpus** — the 1150 noise docs never change between runs. The system has effectively seen this noise during tuning. Production noise is domain-matched and unpredictable.
+
+**Rough honest estimate**: subtract 10-15pp from headline numbers for a realistic out-of-distribution estimate. The relative rankings (pplx > BGE > nomic, LLM expansion helps vague queries) are real. The absolute numbers are optimistic.
+
 ## Remaining Challenges
+
+With best config (pplx-embed + LLM expansion):
 
 - **Temporal** (50%) — needs date-aware search, not similarity matching
 - **Negation** (60%) — needs query parsing for exclusion logic

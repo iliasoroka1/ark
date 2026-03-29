@@ -1,7 +1,10 @@
 """Brutal recall benchmark for ark memory search.
 
-~1173 docs: 23 engineering + 150 general noise + 500 AG News + 500 tech news.
-130 queries across 15 categories.
+~1213 docs: 63 engineering + 150 general noise + 500 AG News + 500 tech news.
+  - 23 core engineering (auth, infra, DB, API, process)
+  - 20 infra/ops (k8s, terraform, CI/CD, vault, istio, observability)
+  - 20 data/backend (kafka, airflow, dbt, ML, snowflake, celery, data quality)
+180 queries across 15 categories.
 
 Categories:
   1. Exact (10) — verbatim phrases
@@ -62,6 +65,48 @@ _ID_FINGERPRINTS: dict[str, str] = {
     "14cddd8bb324a254": "on-call rotation: weekly",
     "c4658bd5ad47ab50": "code review policy updated",
     "592ec5175080e20f": "incident postmortem for 2026-03-12",
+    # infra/ops docs
+    "e20fb0d54dd00b68": "kubernetes hpa for api-gateway min 2 max 10 cpu 70%",
+    "da0ef2072d863866": "resource limits cpu 250m 1000m memory 256mi 1gi oomkilled",
+    "37ccad1e28c5bfcd": "rbac eng-read-all clusterrole okta serviceaccount tokens",
+    "370db464ee7fb506": "terraform state s3 tf-state-prod-us-east-1 dynamodb tf-locks",
+    "0fc646377b06340a": "terraform modules vpc-module rds-module eks-module registry.internal",
+    "ee9086aa47e88593": "terraform workspaces prod staging dev-engineer atlantis approval",
+    "d5e2dd3a32e26bd3": "github actions ci lint unit integration docker ecr ubuntu-22.04",
+    "514580a4390d606c": "github actions build cache docker layer ecr npm pip lock files",
+    "949e9f75d0cc55e7": "deploy gates argo cd staging canary 10% 30 min manual approval",
+    "4a6cd8de1781b393": "hashicorp vault v1.15.2 approle oidc dynamic secrets postgresql aws iam",
+    "0403784b9c613cba": "sealed secrets controller v0.24.1 public key rotated 2026-01-15",
+    "9e5090f3f46ecf06": "secrets rotation 90 days passwords 30 days api keys 7 days tokens",
+    "68645b0bf4713c5e": "istio v1.20.3 mtls strict peerauthentication cert-manager tls",
+    "723f12a447fa24d9": "istio circuit breaker payments-service 5xx ejection 30s retry 3",
+    "65999b4a7d2a41c1": "opentelemetry collector v0.96.0 jaeger 5% prometheus loki operator",
+    "0cd5afa2f85b40da": "grafana v10.2.3 slo-overview 47 alert rules provisioning",
+    "7784a35655c2f9b3": "loki v2.9.4 promtail 30 days 2tb opa admission webhook log-format",
+    "025e3843df69aa56": "kubernetes namespace prod staging dev network policies resourcequota 64 cpu 256gi",
+    "f8f78d25f8ede6e1": "argo cd v2.9.5 automated staging manual prod applicationset crds",
+    "8bcb0c5ad1115947": "node affinity gpu ml-inference spot taint noSchedule spot interruption",
+    # data/backend docs
+    "50f1e8613d70ebb9": "user-events kafka topic 12 partitions ingestion-team",
+    "6a93ac4883bdcca2": "analytics-consumer order-completed kafka lag 10k",
+    "74f7f6e517252c4a": "etl_user_activity airflow dag 02:00 utc depends_on_past",
+    "cb2839d2f8135169": "dbt_analytics fct_orders incremental order_id unique key",
+    "b7330951c5efcd66": "feast user_purchase_features redis online bigquery offline",
+    "be461927d65e33df": "rec_model_v2 20% traffic launchdarkly shadow rec_shadow_log",
+    "9e47d10b624e54c1": "mlflow rec-model/production run id a4f82c91",
+    "df4c8084fd7510dd": "bigquery analytics.events partitioned event_date analytics-team-slot",
+    "3a22c2a67d5dfc32": "snowflake analytics_role loader_role transformer_role acme_corp",
+    "c1232523c63aabf9": "snowflake analytics_wh x-small auto_suspend 60 data-team budget",
+    "504967e93b26b36d": "celery 3 queues default high bulk worker-01 redis-celery",
+    "c1735b58a4eb924a": "email-notifications dlq email-dlq 3 retries exponential backoff",
+    "8c64e6eec31b6724": "process_payment_webhook max_retries=5 payments-dlq sqs",
+    "e988899f20df5a7f": "great expectations orders_suite 12 expectations airflow sensor",
+    "cc1296bb1c9fba07": "dbt freshness fct_orders warn 6h error 24h loaded_at",
+    "d88ec0b47cef4011": "monte carlo raw_events 500k-2m row count jira data-ops",
+    "e912ea6bbf7e7992": "customer_dimension fivetran salesforce-prod nightly 01:30",
+    "e4092b70c7250af5": "revenue_reconciliation backfill 2026-01-01 2026-02-28 59 dag runs",
+    "2a5e787a369bca1a": "clickstream kafka 24 partitions 3 days retention analytics-platform",
+    "788542a9fa58bd2f": "fraud-model-v3 shadow mode fraud_shadow_log auc 0.94",
 }
 
 # Short aliases
@@ -89,6 +134,50 @@ ONCALL = "14cddd8bb324a254"
 CODEREVIEW = "c4658bd5ad47ab50"
 INCIDENT = "592ec5175080e20f"
 
+# infra/ops aliases
+K8S_HPA         = "e20fb0d54dd00b68"
+RESOURCE_LIMITS = "da0ef2072d863866"
+K8S_RBAC        = "37ccad1e28c5bfcd"
+TF_STATE        = "370db464ee7fb506"
+TF_MODULES      = "0fc646377b06340a"
+TF_WORKSPACES   = "ee9086aa47e88593"
+GH_ACTIONS_CI   = "d5e2dd3a32e26bd3"
+BUILD_CACHE     = "514580a4390d606c"
+DEPLOY_GATES    = "949e9f75d0cc55e7"
+VAULT_SECRETS   = "4a6cd8de1781b393"
+SEALED_SECRETS  = "0403784b9c613cba"
+SECRET_ROTATION = "9e5090f3f46ecf06"
+ISTIO_MTLS      = "68645b0bf4713c5e"
+CIRCUIT_BREAKER = "723f12a447fa24d9"
+OTEL_COLLECTOR  = "65999b4a7d2a41c1"
+GRAFANA_DASH    = "0cd5afa2f85b40da"
+LOG_AGG         = "7784a35655c2f9b3"
+NS_STRATEGY     = "025e3843df69aa56"
+ARGOCD          = "f8f78d25f8ede6e1"
+NODE_AFFINITY   = "8bcb0c5ad1115947"
+
+# data/backend aliases
+KAFKA_USER_EVENTS = "50f1e8613d70ebb9"
+KAFKA_ORDER_LAG   = "6a93ac4883bdcca2"
+AIRFLOW_ETL       = "74f7f6e517252c4a"
+DBT_MODELS        = "cb2839d2f8135169"
+FEAST_FEATURES    = "b7330951c5efcd66"
+AB_SHADOW         = "be461927d65e33df"
+MLFLOW_MODEL      = "9e47d10b624e54c1"
+BIGQUERY_PART     = "df4c8084fd7510dd"
+SNOWFLAKE_ROLES   = "3a22c2a67d5dfc32"
+SNOWFLAKE_WH      = "c1232523c63aabf9"
+CELERY_QUEUES     = "504967e93b26b36d"
+CELERY_DLQ        = "c1735b58a4eb924a"
+CELERY_RETRY      = "8c64e6eec31b6724"
+GX_SUITE          = "e988899f20df5a7f"
+DBT_FRESHNESS     = "cc1296bb1c9fba07"
+MONTE_CARLO       = "d88ec0b47cef4011"
+FIVETRAN_CUSTOMER = "e912ea6bbf7e7992"
+AIRFLOW_BACKFILL  = "e4092b70c7250af5"
+KAFKA_CLICKSTREAM = "2a5e787a369bca1a"
+FRAUD_SHADOW      = "788542a9fa58bd2f"
+
 # ── Queries ──
 
 EXACT = [
@@ -102,6 +191,28 @@ EXACT = [
     TestQuery("composite index on orders table", "exact", [INDEX]),
     TestQuery("Datadog monitors for payments-api", "exact", [DATADOG]),
     TestQuery("MFA enforcement rolled out", "exact", [MFA]),
+    # infra/ops exact
+    TestQuery("HPA configured for api-gateway: min 2 replicas, max 10, target CPU 70%", "exact", [K8S_HPA]),
+    TestQuery("tf-state-prod-us-east-1 with DynamoDB table tf-locks", "exact", [TF_STATE]),
+    TestQuery("Vault agent sidecar injects secrets at pod startup", "exact", [VAULT_SECRETS]),
+    TestQuery("mTLS STRICT mode", "exact", [ISTIO_MTLS]),
+    TestQuery("5 consecutive 5xx errors triggers 30s host ejection", "exact", [CIRCUIT_BREAKER]),
+    TestQuery("OpenTelemetry Collector v0.96.0 as DaemonSet", "exact", [OTEL_COLLECTOR]),
+    TestQuery("grafana.internal/d/slo-overview", "exact", [GRAFANA_DASH]),
+    TestQuery("Loki v2.9.4 + Promtail DaemonSet", "exact", [LOG_AGG]),
+    TestQuery("Argo CD v2.9.5 GitOps deployments", "exact", [ARGOCD]),
+    TestQuery("Sealed Secrets controller v0.24.1", "exact", [SEALED_SECRETS]),
+    # data/backend exact
+    TestQuery("user-events Kafka topic 12 partitions ingestion-team lag 50K", "exact", [KAFKA_USER_EVENTS]),
+    TestQuery("etl_user_activity Airflow DAG depends_on_past max_active_runs=1", "exact", [AIRFLOW_ETL]),
+    TestQuery("fct_orders incremental model order_id unique key full refresh", "exact", [DBT_MODELS]),
+    TestQuery("MLflow rec-model/production run ID a4f82c91", "exact", [MLFLOW_MODEL]),
+    TestQuery("ANALYTICS_WH X-Small AUTO_SUSPEND=60 data-team@company.com budget", "exact", [SNOWFLAKE_WH]),
+    TestQuery("email-dlq 3 retries exponential backoff queue depth 100", "exact", [CELERY_DLQ]),
+    TestQuery("process_payment_webhook max_retries=5 payments-dlq SQS 90s SLA", "exact", [CELERY_RETRY]),
+    TestQuery("dbt freshness fct_orders warn 6h error 24h loaded_at", "exact", [DBT_FRESHNESS]),
+    TestQuery("clickstream Kafka 24 partitions retention.ms=259200000 acks=1", "exact", [KAFKA_CLICKSTREAM]),
+    TestQuery("fraud-model-v3 AUC 0.94 rolling 7-day holdout ml-review-board", "exact", [FRAUD_SHADOW]),
 ]
 
 PARAPHRASE = [
@@ -115,6 +226,28 @@ PARAPHRASE = [
     TestQuery("database index for looking up orders by customer", "paraphrase", [INDEX]),
     TestQuery("monitoring and alerting for the payments service", "paraphrase", [DATADOG]),
     TestQuery("mandatory two-factor authentication rollout", "paraphrase", [MFA]),
+    # infra/ops paraphrase
+    TestQuery("horizontal pod autoscaler settings for the API gateway", "paraphrase", [K8S_HPA]),
+    TestQuery("where is our Terraform remote state stored", "paraphrase", [TF_STATE]),
+    TestQuery("how secrets get injected into pods at runtime", "paraphrase", [VAULT_SECRETS]),
+    TestQuery("encrypted traffic between services in the mesh", "paraphrase", [ISTIO_MTLS]),
+    TestQuery("automatic service ejection after repeated failures", "paraphrase", [CIRCUIT_BREAKER]),
+    TestQuery("distributed tracing pipeline and where traces go", "paraphrase", [OTEL_COLLECTOR]),
+    TestQuery("central observability dashboard for service SLOs", "paraphrase", [GRAFANA_DASH]),
+    TestQuery("how are application logs collected and retained", "paraphrase", [LOG_AGG]),
+    TestQuery("GitOps-based production deployment approval process", "paraphrase", [ARGOCD]),
+    TestQuery("how often do we rotate database credentials", "paraphrase", [SECRET_ROTATION]),
+    # data/backend paraphrase
+    TestQuery("how long does Kafka keep messages on the user events topic", "paraphrase", [KAFKA_USER_EVENTS]),
+    TestQuery("scheduled data pipeline for user activity runs at night", "paraphrase", [AIRFLOW_ETL]),
+    TestQuery("how to rebuild dbt orders model after upstream schema change", "paraphrase", [DBT_MODELS]),
+    TestQuery("where is the current production recommendation model stored", "paraphrase", [MLFLOW_MODEL]),
+    TestQuery("what triggers a cost alert on our data warehouse", "paraphrase", [SNOWFLAKE_WH]),
+    TestQuery("how many times does a failed notification job retry", "paraphrase", [CELERY_DLQ]),
+    TestQuery("what happens when the payment webhook task exhausts all retries", "paraphrase", [CELERY_RETRY]),
+    TestQuery("when does dbt raise a data freshness error on orders", "paraphrase", [DBT_FRESHNESS]),
+    TestQuery("what AUC score must the fraud model reach before going live", "paraphrase", [FRAUD_SHADOW]),
+    TestQuery("how is the clickstream Kafka topic configured for producers", "paraphrase", [KAFKA_CLICKSTREAM]),
 ]
 
 TANGENTIAL = [
@@ -141,6 +274,18 @@ ADVERSARIAL = [
     TestQuery("our message queue setup", "adversarial", []),
     TestQuery("our PostgreSQL configuration", "adversarial", [REPLICATION, SESSION]),
     TestQuery("API design patterns we follow", "adversarial", [VERSIONING, ERRORS, PAGINATION]),
+    # infra/ops adversarial — confusable across new docs
+    TestQuery("Kubernetes pod scheduling and resource allocation", "adversarial", [K8S_HPA, RESOURCE_LIMITS, NODE_AFFINITY]),
+    TestQuery("secrets and credentials management in production", "adversarial", [VAULT_SECRETS, SECRET_ROTATION, SEALED_SECRETS]),
+    TestQuery("service mesh traffic policies and failure handling", "adversarial", [ISTIO_MTLS, CIRCUIT_BREAKER]),
+    TestQuery("CI/CD pipeline and build speed optimizations", "adversarial", [GH_ACTIONS_CI, BUILD_CACHE, DEPLOY_GATES]),
+    TestQuery("observability stack: logs, metrics, and traces", "adversarial", [LOG_AGG, OTEL_COLLECTOR, GRAFANA_DASH]),
+    # data/backend adversarial — confusable across new docs
+    TestQuery("Kafka consumer lag alerting", "adversarial", [KAFKA_USER_EVENTS, KAFKA_ORDER_LAG],),
+    TestQuery("our data quality monitoring", "adversarial", [GX_SUITE, DBT_FRESHNESS, MONTE_CARLO]),
+    TestQuery("model promotion criteria", "adversarial", [AB_SHADOW, MLFLOW_MODEL, FRAUD_SHADOW]),
+    TestQuery("Airflow DAG scheduling and backfill", "adversarial", [AIRFLOW_ETL, AIRFLOW_BACKFILL]),
+    TestQuery("Celery task failure handling", "adversarial", [CELERY_DLQ, CELERY_RETRY]),
 ]
 
 NEGATIVE = [
@@ -361,6 +506,37 @@ PRECISION = [
     TestQuery("what PKCE flow did we migrate to", "precision",
               [OAUTH],
               "must find OAuth 2.0 with PKCE"),
+    # hard precision: must distinguish between nearly identical new docs
+    TestQuery("which Kafka topic has 6 partitions", "precision",
+              [KAFKA_ORDER_LAG],
+              "3 Kafka docs — only order-completed has 6 partitions (user-events=12, clickstream=24)"),
+    TestQuery("which Kafka topic has 24 partitions", "precision",
+              [KAFKA_CLICKSTREAM],
+              "3 Kafka docs — only clickstream has 24 partitions"),
+    TestQuery("which secrets rotate every 30 days", "precision",
+              [SECRET_ROTATION],
+              "3 secrets docs — rotation policy doc specifies 30d for API keys"),
+    TestQuery("which Terraform resource needs 2-person approval before apply", "precision",
+              [TF_WORKSPACES],
+              "3 terraform docs — only workspaces doc mentions Atlantis 2-person approval"),
+    TestQuery("which Celery queue has concurrency 16", "precision",
+              [CELERY_QUEUES],
+              "2 Celery docs — bulk queue concurrency=16 is in queues config, not DLQ or retry"),
+    TestQuery("which Airflow DAG uses depends_on_past", "precision",
+              [AIRFLOW_ETL],
+              "2 Airflow docs — etl_user_activity has depends_on_past=True, backfill doc does not"),
+    TestQuery("which dbt check warns after 6 hours", "precision",
+              [DBT_FRESHNESS],
+              "2 dbt docs — freshness check has warn=6h; models doc is about incremental strategy"),
+    TestQuery("which Snowflake warehouse auto-suspends after 60 seconds", "precision",
+              [SNOWFLAKE_WH],
+              "2 Snowflake docs — WH config has AUTO_SUSPEND=60; roles doc has no suspend setting"),
+    TestQuery("what is the minimum HPA replica count for api-gateway", "precision",
+              [K8S_HPA],
+              "must find min=2 — confusable with resource limits or autoscale docs"),
+    TestQuery("which Vault secret type has a 15-minute TTL", "precision",
+              [VAULT_SECRETS],
+              "3 secrets docs — only Vault doc specifies AWS IAM TTL 15m"),
 ]
 
 # 13. Negation — should return specific memories while EXCLUDING a topic
@@ -414,6 +590,22 @@ CROSS_DOMAIN = [
     TestQuery("what would break if Redis went down", "cross_domain",
               [REDIS, MATVIEW],
               "cache layer + would need direct queries"),
+    # cross-domain spanning all 3 doc sets (core + infra + data)
+    TestQuery("end-to-end journey of a payment: from API to data pipeline", "cross_domain",
+              [ENVOY, JWT, INCIDENT, CELERY_RETRY, DATADOG, DBT_FRESHNESS],
+              "proxy → auth → payments outage → webhook task → monitoring → dbt freshness"),
+    TestQuery("how do we deploy a new ML model safely", "cross_domain",
+              [AB_SHADOW, MLFLOW_MODEL, FRAUD_SHADOW, DEPLOY_GATES, ARGOCD],
+              "shadow mode + MLflow staging + fraud AUC threshold + deploy gates + GitOps"),
+    TestQuery("our secrets management from code to pod", "cross_domain",
+              [VAULT_SECRETS, SEALED_SECRETS, SECRET_ROTATION, K8S_RBAC],
+              "Vault injection + sealed secrets in git + rotation policy + RBAC"),
+    TestQuery("what monitors would fire during a data pipeline outage", "cross_domain",
+              [DATADOG, MONTE_CARLO, DBT_FRESHNESS, GX_SUITE],
+              "Datadog payments + Monte Carlo row count + dbt freshness + Great Expectations"),
+    TestQuery("everything that runs on Kubernetes in production", "cross_domain",
+              [CART, AUTOSCALE, K8S_HPA, OTEL_COLLECTOR, LOG_AGG, VAULT_SECRETS, ISTIO_MTLS],
+              "services + HPA + OTel DaemonSet + Promtail + Vault sidecar + Istio mesh"),
 ]
 
 # 15. Needle in haystack — unique detail buried in a longer memory

@@ -126,12 +126,12 @@ async def memory(
     elif action == "search":
         if not query:
             return error("query is required for search action")
-        return await _search(corpus, query)
+        return await _search(corpus, query, agent_id=agent_id)
 
     elif action == "get":
         if not id:
             return error("id is required for get action")
-        return await _get(corpus, id)
+        return await _get(corpus, id, agent_id=agent_id)
 
     elif action == "list":
         return await _list(corpus)
@@ -301,7 +301,7 @@ def _find_co_session(doc_id: str, corpus: str, session_id: str, edges: list, con
             connected.append({"id": other_id, "edge": "co_session"})
 
 
-async def _search(corpus: str, query: str) -> ToolResult:
+async def _search(corpus: str, query: str, agent_id: str = "default") -> ToolResult:
     from tinyclaw.kungfu import Ok
     from tinyclaw.memory.types import SearchParams
 
@@ -312,7 +312,7 @@ async def _search(corpus: str, query: str) -> ToolResult:
         max_hits_per_doc=1,
     )
 
-    match await _searcher.search(query, corpus=corpus, params=params):
+    match await _searcher.search(query, corpus=corpus, params=params, agent_id=agent_id):
         case Ok(hits) if hits:
             results = []
             doc_ids = [h.doc_id for h in hits]
@@ -515,7 +515,7 @@ async def _graph_search(
             return error(f"Search failed: {err}")
 
 
-async def _get(corpus: str, doc_id: str) -> ToolResult:
+async def _get(corpus: str, doc_id: str, agent_id: str = "default") -> ToolResult:
     """Retrieve full body (L2) + edge context for a memory by doc_id."""
     import tantivy
     from tinyclaw.memory.index import F_CHUNK_ATTRIBUTES, F_CHUNK_ID, F_ID
@@ -530,7 +530,7 @@ async def _get(corpus: str, doc_id: str) -> ToolResult:
 
     # ── Touch: bump access count (deliberate L2 read = real signal) ──
     if _indexer.embed_cache is not None:
-        _indexer.embed_cache.touch(doc_id)
+        _indexer.embed_cache.touch(doc_id, agent_id=agent_id)
 
     # Collect chunk bodies in order
     chunks: list[tuple[str, str]] = []

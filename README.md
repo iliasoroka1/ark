@@ -99,7 +99,7 @@ Query
 ### Index-time pipeline
 
 1. **Chunking** — TextChunker (256 tokens), MarkdownChunker, or SymbolChunker (code-aware regex AST)
-2. **Embedding** — `embed_document()` with `search_document:` prefix (nomic asymmetric retrieval)
+2. **Embedding** — `embed_document()` with `search_document:` prefix (default: pplx-embed-v1-0.6b via OpenRouter; fallback: fastembed nomic-embed-text-v1.5)
 3. **Dedup** — skip chunks with cosine ≥ 0.95 to existing corpus vectors
 4. **Tantivy indexing** — `chunk_body` (en_stem analyzed for BM25), `chunk_tokens` (raw), metadata as JSON
 5. **Embedding cache** — SQLite sidecar (`embeddings.db`) storing raw float32 vectors
@@ -108,7 +108,7 @@ Query
 ### Query expansion
 
 - **PRF** (always active) — extracts terms from the top cosine-similar documents in the corpus. No API key needed. Bridges vocabulary gaps automatically.
-- **LLM expansion** (optional) — OpenRouter API with Gemini Flash. Fires for vague/abstract queries when `OPENROUTER_API_KEY` is set. Generates 5-10 specific terms.
+- **LLM expansion** (optional) — OpenRouter API with Gemini Flash. Fires for vague/abstract queries when `OPENROUTER_API_KEY` is set. Generates 5-10 specific terms. Disable with `ARK_NO_LLM_EXPAND=1`.
 
 ### Key parameters
 
@@ -129,24 +129,25 @@ Query
 ### Benchmark
 
 130 queries across 15 categories, 1173 documents (23 engineering + 1150 noise).
+Baseline: `pplx-embed-v1-0.6b` via OpenRouter + `ARK_NO_DECAY=1`.
 
-| Category | Hit@3 | Notes |
-|---|---|---|
-| Exact | 100% | Verbatim phrase matching |
-| Precision | 100% | Single-memory retrieval |
-| Needle | 100% | Specific detail extraction |
-| Conversational | 90% | Vague/informal queries — PRF biggest win |
-| Paraphrase | 80% | Rephrased concepts |
-| Adversarial | 70% | Terms overlap with noise corpus |
-| Lexical traps | 70% | Query words match noise more than targets |
-| Synonym hell | 60% | Zero lexical overlap with documents |
-| Multi-hop | 60% | Requires chaining facts |
-| Compositional | 50% | Requires combining 2+ memories |
-| Tangential | 40% | Abstract/indirect queries |
-| Negation | 40% | Exclusion logic not supported |
-| Cross-domain | 30% | Requires inference chains |
-| Temporal | 20% | Date reasoning not supported |
-| **Overall** | **64.8%** | **MRR: 0.569, 0% false positives** |
+| Category | Hit@3 (no LLM) | Hit@3 (+LLM) | Notes |
+|---|---|---|---|
+| Exact | 100% | 100% | Verbatim phrase matching |
+| Precision | 100% | 100% | Single-memory retrieval |
+| Needle | 100% | 100% | Specific detail extraction |
+| Conversational | 80% | 100% | Vague/informal queries |
+| Paraphrase | 80% | 90% | Rephrased concepts |
+| Adversarial | 60% | 70% | Terms overlap with noise corpus |
+| Lexical traps | 70% | 90% | Query words match noise more than targets |
+| Synonym hell | 80% | 100% | Zero lexical overlap with documents |
+| Multi-hop | 60% | 80% | Requires chaining facts |
+| Compositional | 60% | 80% | Requires combining 2+ memories |
+| Tangential | 50% | 80% | Abstract/indirect queries |
+| Negation | 40% | 60% | Exclusion logic not supported |
+| Cross-domain | 60% | 80% | Requires inference chains |
+| Temporal | 20% | 50% | Date reasoning not supported |
+| **Overall** | **71.2%** | **85.6%** | **MRR: 0.583 / 0.688, 0% false positives** |
 
 ## Spectral analysis
 
@@ -189,7 +190,10 @@ Environment variables `ARK_AGENT_ID` and `ARK_SESSION_ID` scope state per agent/
 | `ARK_SESSION_ID` | `default` | Session ID for session commands |
 | `EMBEDDING_MODEL` | — | Custom embedding HTTP endpoint |
 | `EMBEDDING_DIMS` | `768` | Embedding dimensions |
-| `OPENROUTER_API_KEY` | — | Enables LLM query expansion |
+| `OPENROUTER_API_KEY` | — | Enables LLM query expansion and OpenRouter embedding |
+| `OPENROUTER_EMBED_MODEL` | — | OpenRouter embedding model (e.g. `perplexity/pplx-embed-v1-0.6b`) |
+| `ARK_NO_LLM_EXPAND` | — | Set to `1` to disable LLM query expansion (keeps embedding provider) |
+| `ARK_NO_DECAY` | — | Set to `1` to disable temporal decay (use for deterministic benchmarks) |
 
 ## License
 

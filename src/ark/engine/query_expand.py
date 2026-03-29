@@ -45,7 +45,11 @@ def should_expand(query: str) -> bool:
     Expands most queries EXCEPT those with 2+ specific technical terms
     (proper nouns like JWT, Redis, Okta) which already have strong
     lexical signal for BM25.
+
+    Set ARK_NO_LLM_EXPAND=1 to disable LLM expansion entirely.
     """
+    if os.environ.get("ARK_NO_LLM_EXPAND"):
+        return False
     words = query.split()
     if len(words) <= 2:
         return True

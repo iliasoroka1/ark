@@ -64,6 +64,7 @@ class Searcher:
         source_ids: list[str] | None = None,
         params: SearchParams | None = None,
         expanded_query: str | None = None,
+        agent_id: str = "default",
     ) -> Result[list[SearchHit], SearchErr]:
         if params is None:
             params = SearchParams()
@@ -134,7 +135,8 @@ class Searcher:
         # ── Merge: RRF with score-weighted BM25 ──
         hits = _rrf_merge(cosine_results, bm25_docs, searcher, self._schema,
                           params, self._embed_cache,
-                          bm25_expanded_docs=bm25_expanded_docs)
+                          bm25_expanded_docs=bm25_expanded_docs,
+                          agent_id=agent_id)
 
         # ── Graph expansion ──
         if self._graph_store is not None and self._embed_cache is not None and query_vec is not None:
@@ -265,7 +267,7 @@ _EXPANDED_BM25_WEIGHT = 0.5  # weight multiplier for LLM-expanded BM25 terms
 
 
 def _rrf_merge(cosine_results, bm25_docs, searcher, schema, params, embed_cache=None,
-               bm25_expanded_docs=None):
+               bm25_expanded_docs=None, agent_id="default"):
     """Merge full-precision cosine results with BM25 results via score-weighted RRF.
 
     cosine_results: list of (doc_id, cosine_similarity) from embedding cache
@@ -334,7 +336,7 @@ def _rrf_merge(cosine_results, bm25_docs, searcher, schema, params, embed_cache=
     if embed_cache is not None and not os.environ.get("ARK_NO_DECAY"):
         doc_ids = [d for d in scored if d]
         if doc_ids:
-            meta = embed_cache.get_decay_metadata(doc_ids)
+            meta = embed_cache.get_decay_metadata(doc_ids, agent_id=agent_id)
             for did, (ac, la) in meta.items():
                 if did in scored:
                     factor = _compute_decay(ac, la)

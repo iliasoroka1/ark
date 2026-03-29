@@ -140,7 +140,7 @@ async def _mem_search(query: str) -> dict:
     if should_expand(query):
         expanded = await expand_query(query)
 
-    match await _searcher.search(query, corpus=corpus, params=params, expanded_query=expanded):
+    match await _searcher.search(query, corpus=corpus, params=params, expanded_query=expanded, agent_id="ark-local"):
         case Ok(hits) if hits:
             results = []
             for h in hits:
@@ -241,7 +241,7 @@ async def _mem_graph_search(payload: dict) -> dict:
 
     params = SearchParams(num_to_return=5, num_to_score=20, min_rrf_score=0.005, max_hits_per_doc=1)
 
-    match await _searcher.search(query, corpus=corpus, params=params):
+    match await _searcher.search(query, corpus=corpus, params=params, agent_id="ark-local"):
         case Ok(hits) if hits:
             seed_ids = [(h.doc_id, h.scores.rrf) for h in hits]
             match await _searcher._embedding.embed(query):
