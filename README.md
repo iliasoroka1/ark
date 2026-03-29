@@ -64,7 +64,7 @@ Ark runs a multi-signal hybrid search pipeline with automatic query expansion:
 Query
   │
   ├─ Signal 1: Full-precision cosine similarity
-  │    Embed query with nomic-embed-text-v1.5 (768d)
+  │    Embed query with pplx-embed-v1-0.6b (1024d) via OpenRouter
   │    Brute-force cosine against all corpus vectors in SQLite
   │
   ├─ Pseudo-Relevance Feedback (PRF)
@@ -82,14 +82,24 @@ Query
   ├─ Signal 2b: BM25 (expanded query, half weight)
   │    Uses PRF terms or LLM-expanded terms for vocabulary bridging
   │
+  ├─ Temporal candidate injection (when query has dates)
+  │    Regex detects dates in query → resolve to period node IDs
+  │    Look up hypergraph period nodes (month:YYYY-MM, quarter:YYYY-QN)
+  │    Inject connected docs into candidate pool via occurred_in edges
+  │
+  ├─ Signal 3: Temporal proximity (when query has dates)
+  │    Gaussian decay: score = exp(-distance²/2σ²), σ=15 days
+  │    Weight 1.5x in RRF — only active for temporal queries
+  │
   ├─ RRF Merge
   │    Score-weighted Reciprocal Rank Fusion (K=15)
   │    Embedding weight: 2.0x, BM25 weight: 1.5x
-  │    Expanded BM25: 0.5x multiplier
+  │    Expanded BM25: 0.5x, Temporal: 1.5x (when active)
   │
-  ├─ Temporal Decay
+  ├─ Temporal Decay (per-agent)
   │    decay = max(0.3, 1.0 - age_days/365 * 0.5)
   │    Access boost = min(1.3, 1.0 + access_count * 0.02)
+  │    Scoped per agent_id — one agent's usage doesn't affect another's
   │
   └─ Graph Expansion
        2-hop traversal from top-5 hits
@@ -104,6 +114,7 @@ Query
 4. **Tantivy indexing** — `chunk_body` (en_stem analyzed for BM25), `chunk_tokens` (raw), metadata as JSON
 5. **Embedding cache** — SQLite sidecar (`embeddings.db`) storing raw float32 vectors
 6. **Graph edges** — auto-generated from source_id attributes (`derives_from`, `contradicts`)
+7. **Temporal hypergraph** — dates extracted from doc text, linked to period nodes (`month:2026-01`, `quarter:2026-Q1`) via `occurred_in` edges
 
 ### Query expansion
 
@@ -124,30 +135,38 @@ Query
 | Graph min similarity | 0.55 | Cosine floor for graph expansion |
 | Graph hops | 2 | Traversal depth |
 | Dedup threshold | 0.95 | Cosine threshold for chunk dedup |
+| Temporal weight | 1.5 | Temporal signal weight in RRF (only when query has dates) |
+| Temporal sigma | 15 days | Gaussian decay std dev for temporal proximity |
 | Decay half-life | 365 days | Temporal decay rate |
 
 ### Benchmark
 
-130 queries across 15 categories, 1173 documents (23 engineering + 1150 noise).
+220 queries across 20 categories, 1233 documents (83 target + 1150 noise).
+Target docs: 23 core engineering + 20 infra/ops + 20 data/backend + 20 business/ops.
 Baseline: `pplx-embed-v1-0.6b` via OpenRouter + `ARK_NO_DECAY=1`.
 
 | Category | Hit@3 (no LLM) | Hit@3 (+LLM) | Notes |
 |---|---|---|---|
-| Exact | 100% | 100% | Verbatim phrase matching |
-| Precision | 100% | 100% | Single-memory retrieval |
+| Exact | 97% | 97% | Verbatim phrase matching |
+| Paraphrase | 97% | 93% | Rephrased concepts |
+| Precision | 95% | 95% | Distinguish near-identical docs |
+| Conversational | 100% | 100% | Vague/informal queries |
 | Needle | 100% | 100% | Specific detail extraction |
-| Conversational | 80% | 100% | Vague/informal queries |
-| Paraphrase | 80% | 90% | Rephrased concepts |
-| Adversarial | 60% | 70% | Terms overlap with noise corpus |
-| Lexical traps | 70% | 90% | Query words match noise more than targets |
-| Synonym hell | 80% | 100% | Zero lexical overlap with documents |
-| Multi-hop | 60% | 80% | Requires chaining facts |
-| Compositional | 60% | 80% | Requires combining 2+ memories |
-| Tangential | 50% | 80% | Abstract/indirect queries |
-| Negation | 40% | 60% | Exclusion logic not supported |
-| Cross-domain | 60% | 80% | Requires inference chains |
-| Temporal | 20% | 50% | Date reasoning not supported |
-| **Overall** | **71.2%** | **85.6%** | **MRR: 0.583 / 0.688, 0% false positives** |
+| Adversarial | 80% | 85% | Confusable docs + noise overlap |
+| Synonym hell | 60% | 100% | Zero lexical overlap |
+| Compositional | 50% | 70% | Combining 2+ memories |
+| Cross-domain | 47% | 67% | Connecting different domains |
+| Temporal | 47% | 60% | Date-aware search (hypergraph + Gaussian) |
+| Lexical traps | 60% | 60% | Query words match noise more |
+| Multi-hop | 60% | 60% | Chaining facts |
+| Tangential | 40% | 50% | Abstract/indirect queries |
+| Negation | 20% | 20% | Exclusion logic not supported |
+| Biz exact | 0% | 100% | Business language — needs LLM bridge |
+| Biz paraphrase | 0% | 100% | Technical rephrasing of business docs |
+| Biz cross-domain | 60% | 100% | Connecting business + engineering |
+| Biz temporal | 0% | 100% | Business docs with dates |
+| Biz adversarial | 0% | 67% | Business vs noise overlap |
+| **Overall** | **75.8%** | **82.8%** | **MRR: 0.679 / 0.716, 0% false positives** |
 
 ## Spectral analysis
 
