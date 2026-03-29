@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
+
+log = logging.getLogger(__name__)
 
 import msgspec
 
@@ -180,6 +183,21 @@ async def _mem_add(content: str, tag: str) -> dict:
         return {"ok": False, "error": f"Failed to index: {result}"}
 
     n = result.unwrap()
+
+    # Trigger background dream cycle if enough observations accumulated
+    try:
+        from ark.engine.dreamer import maybe_dream
+        dream_result = await maybe_dream(
+            agent_id="ark-local",
+            indexer=_indexer,
+            searcher=_searcher,
+        )
+        if dream_result:
+            log.info("dream cycle: created=%d deleted=%d pruned=%d",
+                     dream_result.created, dream_result.deleted, dream_result.pruned_stale)
+    except Exception:
+        pass  # dreamer is best-effort, never block ingest
+
     return {"ok": True, "result": {"status": "stored", "id": doc_id, "chunks": n, "l0": l0}}
 
 
