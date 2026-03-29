@@ -195,7 +195,7 @@ def run_setup() -> None:
         masked = f"{current_key[:12]}...{current_key[-4:]}" if len(current_key) > 16 else ""
         if masked:
             console.print(f"  Current key: [dim]{masked}[/]")
-        key = Prompt.ask("  Enter API key (or press Enter to keep current)", default=current_key, password=True)
+        key = Prompt.ask("  Enter API key (or press Enter to keep current)", default=current_key)
         if key:
             config["openrouter_api_key"] = key
             console.print("  [green]Key saved[/]")
