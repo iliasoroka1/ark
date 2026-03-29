@@ -102,6 +102,8 @@ async def call_tool(tool_name: str, payload: dict) -> dict:
         return {"status": "ok", "mode": "local"}
     if tool_name == "analyze":
         return _mem_analyze()
+    if tool_name == "dream":
+        return await _mem_dream(payload)
     return {"ok": False, "error": f"local mode doesn't support tool {tool_name!r}"}
 
 
@@ -277,6 +279,33 @@ def _mem_path(from_id: str, to_id: str) -> dict:
         return {"ok": True, "result": {"path": None, "message": "No connection found"}}
     steps = [{"id": nid, "via": etype} if etype else {"id": nid} for nid, etype in path]
     return {"ok": True, "result": {"path": steps, "hops": len(steps) - 1}}
+
+
+async def _mem_dream(payload: dict) -> dict:
+    _ensure_init()
+    from ark.engine.dreamer import dream as run_dream
+
+    agent_id = payload.get("agent_id", "ark-local")
+    model = payload.get("model", "")
+    try:
+        result = await run_dream(
+            agent_id=agent_id,
+            indexer=_indexer,
+            searcher=_searcher,
+            model=model,
+        )
+        return {
+            "ok": True,
+            "result": {
+                "surprisal_count": result.surprisal_count,
+                "iterations": result.iterations,
+                "created": result.created,
+                "deleted": result.deleted,
+                "pruned_stale": result.pruned_stale,
+            },
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"Dream failed: {e}"}
 
 
 def _mem_analyze() -> dict:

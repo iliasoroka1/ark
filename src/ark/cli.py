@@ -116,6 +116,38 @@ def ping():
 
 
 @ark.command()
+@click.option("--agent-id", default="ark-local", help="Agent ID to dream for.")
+@click.option("--model", default=None, help="Override dreamer model.")
+def dream(agent_id, model):
+    """Run a memory consolidation (dream) cycle."""
+
+    async def _dream():
+        from ark.engine.dreamer import dream as run_dream
+        import ark.local as local
+
+        local._ensure_init()
+        try:
+            result = await run_dream(
+                agent_id=agent_id,
+                indexer=local._indexer,
+                searcher=local._searcher,
+                model=model or "",
+            )
+            print(json.dumps({
+                "surprisal_count": result.surprisal_count,
+                "iterations": result.iterations,
+                "created": result.created,
+                "deleted": result.deleted,
+                "pruned_stale": result.pruned_stale,
+            }, indent=2))
+        except Exception as e:
+            click.echo(f"Error: {e}", err=True)
+            raise SystemExit(1)
+
+    asyncio.run(_dream())
+
+
+@ark.command()
 def analyze():
     """Run spectral analysis on the knowledge graph."""
 

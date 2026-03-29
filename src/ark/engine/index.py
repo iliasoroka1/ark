@@ -209,6 +209,38 @@ class Indexer:
         edges = [(doc.id, sid, edge_type, doc.corpus, weight) for sid in source_ids]
         self._graph_store.add_edges_batch(edges)
 
+    def _lookup_status(self, doc_id: str) -> tuple[bool, bool, int | None]:
+        """Check existence, failed chunks, and content hash for a doc."""
+        self._index.reload()
+        searcher = self._index.searcher()
+        query = tantivy.Query.term_query(self._schema, F_ID, doc_id)
+        hits = searcher.search(query, limit=10).hits
+        if not hits:
+            return False, False, None
+        for _score, addr in hits:
+            doc = searcher.doc(addr)
+            if doc.get_all(F_CHUNK_ID):
+                continue
+            failed_vals = doc.get_all(F_FAILED_CHUNKS)
+            has_failures = bool(failed_vals and failed_vals[0] > 0)
+            hash_vals = doc.get_all(F_CONTENT_HASH)
+            content_hash = hash_vals[0] if hash_vals else None
+            return True, has_failures, content_hash
+        return True, False, None
+
+    def is_indexed(self, doc_id: str) -> bool:
+        """Check if a document exists in the index."""
+        indexed, _, _ = self._lookup_status(doc_id)
+        return indexed
+
+    def invalidate_observation(self, doc_id: str) -> None:
+        """Soft-delete: invalidate graph edges for a doc. Node stays in tantivy.
+
+        Used by dreamer when superseding a fact — preserves history.
+        """
+        if self._graph_store is not None:
+            self._graph_store.invalidate_node(doc_id)
+
     def delete(self, doc_id: str) -> None:
         self._writer.delete_documents(F_ID, doc_id)
         if self._embed_cache is not None:
