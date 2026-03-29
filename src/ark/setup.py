@@ -226,22 +226,30 @@ def run_setup() -> None:
     config["dreamer_model"] = dreamer["model"]
     console.print(f"  [green]Selected:[/] {dreamer['name']}")
 
-    # ── Step 5: Server port ──
+    # ── Step 5: Server ──
     _step_header(5, "Server")
-    port = IntPrompt.ask("  HTTP server port", default=int(config.get("port", 7070)))
-    config["port"] = port
+    if Confirm.ask("  Enable HTTP server?", default=config.get("server_enabled", True)):
+        port = IntPrompt.ask("  HTTP server port", default=int(config.get("port", 7070)))
+        config["port"] = port
+        config["server_enabled"] = True
+    else:
+        config["server_enabled"] = False
+        console.print("  [dim]Server disabled — ark will run in local-only mode (CLI + direct calls)[/]")
 
     # ── Save ──
     save_config(config)
 
     console.print()
+    start_lines = []
+    if config.get("server_enabled"):
+        start_lines.append(f"  [bold]ark serve[/]         — start the HTTP server on port {config.get('port', 7070)}")
+    start_lines.append("  [bold]ark search[/] [dim]\"query\"[/] — search your knowledge")
+    start_lines.append("  [bold]ark dream[/]          — run memory consolidation")
+
     console.print(Panel(
         "[bold green]Setup complete![/]\n\n"
         f"Config saved to [cyan]{CONFIG_PATH}[/]\n\n"
-        "Start ark:\n"
-        f"  [bold]ark serve[/]         — start the HTTP server on port {port}\n"
-        "  [bold]ark search[/] [dim]\"query\"[/] — search your knowledge\n"
-        "  [bold]ark dream[/]          — run memory consolidation",
+        "Start ark:\n" + "\n".join(start_lines),
         border_style="green",
         padding=(1, 2),
     ))
