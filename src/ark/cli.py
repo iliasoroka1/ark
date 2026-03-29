@@ -14,6 +14,13 @@ def ark():
 
 
 @ark.command()
+def setup():
+    """Interactive setup wizard — choose models, set API keys, configure paths."""
+    from ark.setup import run_setup
+    run_setup()
+
+
+@ark.command()
 @click.option("--host", default="0.0.0.0", help="Bind host.")
 @click.option("--port", default=7070, type=int, help="Bind port.")
 @click.option("--data-dir", default=None, help="Data directory (default: ~/.ark).")
