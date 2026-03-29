@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 from rich.console import Console
@@ -17,6 +18,54 @@ from rich.table import Table
 from rich.text import Text
 
 console = Console()
+
+
+def _select_menu(items: list[dict], label_key: str, detail_key: str, current_idx: int = 0) -> int:
+    """Arrow-key navigable selection menu. Returns selected index."""
+    import tty
+    import termios
+
+    def _read_key():
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            if ch == '\x1b':
+                ch2 = sys.stdin.read(1)
+                if ch2 == '[':
+                    ch3 = sys.stdin.read(1)
+                    if ch3 == 'A': return 'up'
+                    if ch3 == 'B': return 'down'
+                return 'esc'
+            if ch in ('\r', '\n'): return 'enter'
+            if ch.isdigit(): return ch
+            return ch
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    idx = current_idx
+
+    while True:
+        # Clear and redraw
+        for i, item in enumerate(items):
+            if i == idx:
+                console.print(f"  [bold cyan]> {i+1}. {item[label_key]}[/]  [dim]{item[detail_key]}[/]")
+            else:
+                console.print(f"    {i+1}. [dim]{item[label_key]}[/]  [dim]{item[detail_key]}[/]")
+
+        key = _read_key()
+        if key == 'up':
+            idx = (idx - 1) % len(items)
+        elif key == 'down':
+            idx = (idx + 1) % len(items)
+        elif key == 'enter':
+            return idx
+        elif key.isdigit() and 1 <= int(key) <= len(items):
+            return int(key) - 1
+
+        # Move cursor up to redraw
+        console.print(f"\033[{len(items)}A", end="")
 
 CONFIG_PATH = Path.home() / ".ark" / "config.json"
 
@@ -113,26 +162,12 @@ def run_setup() -> None:
     # ── Step 1: Embedding model ──
     _step_header(1, "Embedding Model")
 
-    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2), expand=True)
-    table.add_column("#", style="cyan", width=3)
-    table.add_column("Model", width=26, no_wrap=True)
-    table.add_column("Type", width=16, no_wrap=True)
-    table.add_column("Dims", width=5)
-    table.add_column("Notes", style="dim", ratio=1)
-
-    for i, m in enumerate(EMBEDDING_MODELS, 1):
-        table.add_row(str(i), m["name"], m["type"], str(m["dims"]), m["note"])
-
-    console.print(table)
-    console.print()
+    console.print("  [dim]Use arrow keys to navigate, Enter to select (or type 1-4)[/]\n")
 
     current = config.get("embedding_model", "nomic")
-    choice = IntPrompt.ask(
-        "  Choose embedding model",
-        default=next((i for i, m in enumerate(EMBEDDING_MODELS, 1) if m["id"] == current), 1),
-        choices=[str(i) for i in range(1, len(EMBEDDING_MODELS) + 1)],
-    )
-    embed_model = EMBEDDING_MODELS[choice - 1]
+    current_idx = next((i for i, m in enumerate(EMBEDDING_MODELS) if m["id"] == current), 0)
+    choice = _select_menu(EMBEDDING_MODELS, "name", "note", current_idx)
+    embed_model = EMBEDDING_MODELS[choice]
     config["embedding_model"] = embed_model["id"]
     config["embedding_dims"] = embed_model["dims"]
     config["embedding_env"] = embed_model["env"]
@@ -168,24 +203,12 @@ def run_setup() -> None:
     console.print("  The dreamer runs an LLM to find knowledge updates,")
     console.print("  contradictions, and logical implications in your memories.\n")
 
-    table2 = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
-    table2.add_column("#", style="cyan", width=3)
-    table2.add_column("Model", width=24)
-    table2.add_column("Notes", style="dim")
-
-    for i, m in enumerate(DREAMER_MODELS, 1):
-        table2.add_row(str(i), m["name"], m["note"])
-
-    console.print(table2)
-    console.print()
+    console.print("  [dim]Use arrow keys to navigate, Enter to select (or type 1-3)[/]\n")
 
     current_dreamer = config.get("dreamer_model_id", "gemini-flash")
-    choice2 = IntPrompt.ask(
-        "  Choose dreamer model",
-        default=next((i for i, m in enumerate(DREAMER_MODELS, 1) if m["id"] == current_dreamer), 1),
-        choices=[str(i) for i in range(1, len(DREAMER_MODELS) + 1)],
-    )
-    dreamer = DREAMER_MODELS[choice2 - 1]
+    current_idx2 = next((i for i, m in enumerate(DREAMER_MODELS) if m["id"] == current_dreamer), 0)
+    choice2 = _select_menu(DREAMER_MODELS, "name", "note", current_idx2)
+    dreamer = DREAMER_MODELS[choice2]
     config["dreamer_model_id"] = dreamer["id"]
     config["dreamer_model"] = dreamer["model"]
     console.print(f"  [green]Selected:[/] {dreamer['name']}")
