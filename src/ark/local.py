@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
+
+log = logging.getLogger(__name__)
 
 import msgspec
 
@@ -102,6 +105,8 @@ async def call_tool(tool_name: str, payload: dict) -> dict:
         return {"status": "ok", "mode": "local"}
     if tool_name == "analyze":
         return _mem_analyze()
+    if tool_name == "dream":
+        return await _mem_dream(payload)
     return {"ok": False, "error": f"local mode doesn't support tool {tool_name!r}"}
 
 
@@ -178,6 +183,21 @@ async def _mem_add(content: str, tag: str) -> dict:
         return {"ok": False, "error": f"Failed to index: {result}"}
 
     n = result.unwrap()
+
+    # Trigger background dream cycle if enough observations accumulated
+    try:
+        from ark.engine.dreamer import maybe_dream
+        dream_result = await maybe_dream(
+            agent_id="ark-local",
+            indexer=_indexer,
+            searcher=_searcher,
+        )
+        if dream_result:
+            log.info("dream cycle: created=%d deleted=%d pruned=%d",
+                     dream_result.created, dream_result.deleted, dream_result.pruned_stale)
+    except Exception:
+        pass  # dreamer is best-effort, never block ingest
+
     return {"ok": True, "result": {"status": "stored", "id": doc_id, "chunks": n, "l0": l0}}
 
 
@@ -277,6 +297,33 @@ def _mem_path(from_id: str, to_id: str) -> dict:
         return {"ok": True, "result": {"path": None, "message": "No connection found"}}
     steps = [{"id": nid, "via": etype} if etype else {"id": nid} for nid, etype in path]
     return {"ok": True, "result": {"path": steps, "hops": len(steps) - 1}}
+
+
+async def _mem_dream(payload: dict) -> dict:
+    _ensure_init()
+    from ark.engine.dreamer import dream as run_dream
+
+    agent_id = payload.get("agent_id", "ark-local")
+    model = payload.get("model", "")
+    try:
+        result = await run_dream(
+            agent_id=agent_id,
+            indexer=_indexer,
+            searcher=_searcher,
+            model=model,
+        )
+        return {
+            "ok": True,
+            "result": {
+                "surprisal_count": result.surprisal_count,
+                "iterations": result.iterations,
+                "created": result.created,
+                "deleted": result.deleted,
+                "pruned_stale": result.pruned_stale,
+            },
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"Dream failed: {e}"}
 
 
 def _mem_analyze() -> dict:

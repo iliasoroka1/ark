@@ -138,6 +138,22 @@ class GraphStore:
         results.sort(key=lambda x: x[3], reverse=True)
         return results
 
+    def invalidate_node(self, doc_id: str) -> None:
+        """Soft-delete: set invalid_at on all edges FROM this node."""
+        now = datetime.now(UTC).isoformat()
+        self._conn.execute(
+            "UPDATE edges SET invalid_at = ? WHERE from_id = ? AND invalid_at IS NULL",
+            (now, doc_id),
+        )
+        self._conn.commit()
+
+    def delete_node(self, doc_id: str) -> None:
+        """Hard delete all edges touching this node."""
+        self._conn.execute(
+            "DELETE FROM edges WHERE from_id = ? OR to_id = ?", (doc_id, doc_id)
+        )
+        self._conn.commit()
+
     def count_contradictions(self, doc_id: str) -> int:
         row = self._conn.execute(
             "SELECT COUNT(*) FROM edges WHERE to_id = ? AND edge_type = 'contradicts' AND invalid_at IS NULL",
