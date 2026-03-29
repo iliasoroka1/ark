@@ -34,10 +34,33 @@ def _extract_l0(text: str, max_len: int = 200) -> str:
     return cut + "…"
 
 
+def _load_config_env() -> None:
+    """Load ~/.ark/config.json and set env vars (if not already set)."""
+    config_path = os.path.join(os.path.expanduser("~"), ".ark", "config.json")
+    if not os.path.exists(config_path):
+        return
+    try:
+        import json as _json
+        config = _json.loads(open(config_path).read())
+        if config.get("openrouter_api_key") and not os.environ.get("OPENROUTER_API_KEY"):
+            os.environ["OPENROUTER_API_KEY"] = config["openrouter_api_key"]
+        for k, v in config.get("embedding_env", {}).items():
+            if not os.environ.get(k):
+                os.environ[k] = v
+        if config.get("ark_home") and not os.environ.get("ARK_HOME"):
+            os.environ["ARK_HOME"] = config["ark_home"]
+        if config.get("dreamer_model") and not os.environ.get("DREAMER_MODEL"):
+            os.environ["DREAMER_MODEL"] = config["dreamer_model"]
+    except Exception:
+        pass
+
+
 def _ensure_init() -> None:
     global _indexer, _searcher, _graph_store, _initialized
     if _initialized:
         return
+
+    _load_config_env()
 
     from ark.engine.index import Indexer
     from ark.engine.search import Searcher
@@ -185,18 +208,19 @@ async def _mem_add(content: str, tag: str) -> dict:
     n = result.unwrap()
 
     # Trigger background dream cycle if enough observations accumulated
-    try:
-        from ark.engine.dreamer import maybe_dream
-        dream_result = await maybe_dream(
-            agent_id="ark-local",
-            indexer=_indexer,
-            searcher=_searcher,
-        )
-        if dream_result:
-            log.info("dream cycle: created=%d deleted=%d pruned=%d",
-                     dream_result.created, dream_result.deleted, dream_result.pruned_stale)
-    except Exception:
-        pass  # dreamer is best-effort, never block ingest
+    if not os.environ.get("ARK_NO_DREAM"):
+        try:
+            from ark.engine.dreamer import maybe_dream
+            dream_result = await maybe_dream(
+                agent_id="ark-local",
+                indexer=_indexer,
+                searcher=_searcher,
+            )
+            if dream_result:
+                log.info("dream cycle: created=%d deleted=%d pruned=%d",
+                         dream_result.created, dream_result.deleted, dream_result.pruned_stale)
+        except Exception:
+            pass  # dreamer is best-effort, never block ingest
 
     return {"ok": True, "result": {"status": "stored", "id": doc_id, "chunks": n, "l0": l0}}
 
