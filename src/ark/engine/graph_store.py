@@ -8,7 +8,7 @@ from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-EDGE_TYPES = {'derives_from', 'contradicts', 'related_to', 'same_tag', 'co_session', 'calls', 'implements', 'depends_on', 'defines', 'references', 'contains'}
+EDGE_TYPES = {'derives_from', 'contradicts', 'related_to', 'same_tag', 'co_session', 'calls', 'implements', 'depends_on', 'defines', 'references', 'contains', 'occurred_in'}
 
 
 class GraphStore:

@@ -1,9 +1,13 @@
-"""Re-embed all memories with nomic-embed-text-v1.5.
+"""Re-embed all memories.
 
-Clears old embeddings.db (384d bge-small) and tantivy index,
-then re-ingests all memories with the new 768d model.
+Clears old embeddings.db and tantivy index, then re-ingests all memories
+with the configured embedding provider (default: fastembed nomic; set
+OPENROUTER_EMBED_MODEL + OPENROUTER_API_KEY for pplx-embed).
+
+Total corpus: 83 engineering/business docs (23 core + 20 infra + 20 data + 20 business/ops) + 1150 noise.
 """
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -37,20 +41,107 @@ ENGINEERING = [
 ]
 
 
+ENGINEERING_INFRA = [
+    "Kubernetes HPA configured for api-gateway: min 2 replicas, max 10, target CPU 70%, scale-down stabilization 300s. Managed by platform-team in k8s/overlays/prod/hpa.yaml.",
+    "Resource limits enforced for all pods in prod namespace: CPU request 250m/limit 1000m, memory request 256Mi/limit 1Gi. OOMKilled events in ml-inference-service triggered refactor in Feb 2026.",
+    "RBAC policy: engineers get view on all namespaces, write only on their team namespace. ServiceAccount tokens rotated weekly. ClusterRole 'eng-read-all' bound to group engineering@company.com via Okta.",
+    "Terraform state stored in S3 bucket tf-state-prod-us-east-1 with DynamoDB table tf-locks for state locking. Backend config in terraform/backend.tf, owned by infra-team.",
+    "Terraform modules pinned: vpc-module v2.1.0, rds-module v1.4.2, eks-module v3.0.1 in terraform/modules.tf. All modules sourced from internal registry at registry.internal/terraform.",
+    "Terraform workspaces: prod, staging, dev-{engineer} per developer. Workspace variables in terraform/vars/{workspace}.tfvars. Prod workspace requires 2-person approval in Atlantis before apply.",
+    "GitHub Actions CI pipeline for all services: lint -> unit tests -> integration tests -> docker build -> push to ECR. Defined in .github/workflows/ci.yml, runs on ubuntu-22.04, avg build time 4m32s.",
+    "GitHub Actions build cache: Docker layer cache stored in ECR, npm/pip caches in GitHub Actions cache. Cache key is hash of lock files. Saves avg 2m10s per build across 12 repos.",
+    "Deploy gates in Argo CD: staging canary at 10% for 30 min before full rollout. Production requires manual approval from service owner. Gate config in argocd/apps/{service}/rollout.yaml.",
+    "HashiCorp Vault v1.15.2 on k8s in vault namespace. AppRole auth for services, OIDC for engineers. Dynamic secrets: PostgreSQL TTL 1h, AWS IAM TTL 15m. Vault agent sidecar injects secrets at pod startup.",
+    "Sealed Secrets controller v0.24.1 encrypts secrets for Git storage. Public key rotated 2026-01-15. Cert from sealed-secrets-controller in kube-system namespace. bitnami/sealed-secrets chart version 2.15.3.",
+    "Secrets rotation policy: database passwords every 90 days, API keys every 30 days, service tokens every 7 days. Rotation automated via Vault + secrets-rotation.yml GitHub Actions workflow. Last full rotation 2026-02-01.",
+    "Istio service mesh v1.20.3 in prod cluster. All east-west traffic mTLS STRICT mode. PeerAuthentication policy applied cluster-wide. Ingress via Istio gateway on port 443 with cert-manager issued TLS.",
+    "Istio circuit breaker for payments-service: 5 consecutive 5xx errors triggers 30s host ejection from load balancer pool. Retry policy: 3 retries, 500ms backoff, on 503s. Config in VirtualService payments-vs.yaml.",
+    "OpenTelemetry Collector v0.96.0 as DaemonSet. Traces to Jaeger (5% sampling), metrics to Prometheus, logs to Loki. Auto-instrumentation for Java and Python via OpenTelemetry Operator in otel-system namespace.",
+    "Grafana v10.2.3 dashboards for all services. SLO overview at grafana.internal/d/slo-overview, refresh 5s. Alert rules sync'd from grafana/provisioning/alerting/ in infra repo. 47 active alert rules across 8 service teams.",
+    "Log aggregation: Loki v2.9.4 + Promtail DaemonSet. Retention 30 days prod, 7 days staging. Volume ~2TB/day. Structured JSON logs enforced for all services via OPA admission webhook log-format-policy.",
+    "Kubernetes namespace strategy: prod, staging, dev-{team}. Network policies block cross-team traffic in dev. Prod has PodSecurityPolicy restricted. ResourceQuota per namespace: 64 CPU cores, 256Gi memory.",
+    "Argo CD v2.9.5 GitOps deployments. Sync policy: automated for staging, manual for prod. ApplicationSet used for per-service apps. Custom health checks defined for all CRDs in argocd/apps/.",
+    "Node affinity rules: ml-inference pods on GPU nodes (node.kubernetes.io/gpu=true), prod on on-demand, batch on spot. Taint spot=true:NoSchedule on spot node pool. Spot interruption handler DaemonSet in kube-system.",
+]
+
+ENGINEERING_DATA = [
+    'user-events Kafka topic has 12 partitions, retention 7 days. Consumer group ingestion-team monitors lag via Burrow; PagerDuty alert fires when lag exceeds 50K messages for 3 consecutive minutes.',
+    'analytics-consumer group reads from order-completed Kafka topic (6 partitions, replication-factor 3). Lag monitored via Prometheus kafka_consumer_group_lag metric; alert fires at lag > 10K messages for 5 minutes, routes to #data-oncall.',
+    'etl_user_activity Airflow DAG runs daily at 02:00 UTC, max_active_runs=1, depends_on_past=True. Backfill triggered via: airflow dags backfill -s 2026-01-01 -e 2026-02-01 etl_user_activity.',
+    'dbt_analytics project has 47 models. fct_orders incremental model uses order_id as unique key with merge strategy. Full refresh required after schema changes to raw_orders: dbt run --full-refresh --select fct_orders.',
+    'ML feature store uses Feast 0.32. user_purchase_features feature view refreshed every 15 min via materialization job. Online store backed by Redis (ttl 1h), offline store in BigQuery dataset feast_offline.',
+    'rec_model_v2 receives 20% of recommendation traffic via feature flag rec-ab-test in LaunchDarkly. Shadow mode logs predictions to rec_shadow_log without affecting users. Rollback threshold: CTR drops > 5% vs control.',
+    'MLflow tracks experiments under recommendations project. Production model is run ID a4f82c91, registered as rec-model/production. Challenger model rec-model/staging promoted after A/B test with p < 0.05 lift in CTR.',
+    'analytics.events BigQuery table partitioned by event_date (daily), clustered on user_id, event_type. Query cost capped at $50 per query via BI Engine reservation analytics-team-slot (100 slots). Partition expiry: 365 days.',
+    'Snowflake roles: ANALYTICS_ROLE has SELECT on PROD_DB.PUBLIC.*; LOADER_ROLE has INSERT and COPY INTO; TRANSFORMER_ROLE owns DBT_PROD schema. Cross-account data share enabled for partner acme_corp (account: acme.us-east-1).',
+    'Snowflake warehouse ANALYTICS_WH configured: size=X-Small, AUTO_SUSPEND=60, AUTO_RESUME=true, MAX_CLUSTER_COUNT=3. Monthly spend alert at $2000 sends email to data-team@company.com via Snowflake budget policy.',
+    'Celery workers run 3 queues: default (concurrency 8, priority 5), high (concurrency 4, priority 10), bulk (concurrency 16, priority 1). Beat scheduler on worker-01. CELERY_TASK_SERIALIZER=json, broker=redis://redis-celery:6379/0.',
+    'Failed tasks in email-notifications Celery queue moved to DLQ email-dlq after 3 retries with exponential backoff: countdown=1s, 2s, 4s. DLQ alert fires if queue depth > 100 messages; reviewed by data-platform team weekly.',
+    'process_payment_webhook Celery task: max_retries=5, countdown=30, autoretry_for=(PaymentGatewayError, NetworkTimeout). On final failure, task serialized to payments-dlq SQS queue for manual replay. SLA: complete within 90s.',
+    'Great Expectations suite orders_suite has 12 expectations on orders data source. expect_column_values_to_not_be_null on order_id, expect_column_values_to_be_between on amount (0, 100000). Suite runs post-ETL; failures block dbt models via Airflow sensor.',
+    'dbt freshness check on fct_orders: warn after 6h, error after 24h, based on loaded_at column. Failures route alert to #data-quality Slack channel. Freshness checked every 30 min by dbt Cloud job freshness-monitor-prod.',
+    'Monte Carlo monitors raw_events table: expected row count 500K-2M per day. Anomaly detector fires if < 400K or > 3M rows, or if null rate on user_id exceeds 0.1%. Incidents auto-created in Jira project DATA-OPS.',
+    'customer_dimension table rebuilt nightly at 01:30 UTC from Salesforce via Fivetran connector salesforce-prod. Incremental sync runs every 2h (08:00-20:00 UTC). Schema change notifications sent to #fivetran-alerts channel.',
+    'revenue_reconciliation Airflow DAG backfilled 2026-01-01 to 2026-02-28 after decimal precision migration on amount column. 59 DAG runs completed with max_active_runs=3, catchup=True. Validation: reconcile_task compared ETL output vs source totals.',
+    'clickstream Kafka topic: 24 partitions, retention.ms=259200000 (3 days), log.cleanup.policy=delete, segment.bytes=1073741824. Producer config: acks=1, batch.size=65536, linger.ms=5. Topic owned by analytics-platform team.',
+    'fraud-model-v3 deployed in shadow mode alongside fraud-model-v2. Shadow predictions written to fraud_shadow_log BigQuery table. Promotion to production requires AUC >= 0.94 on rolling 7-day holdout evaluated by ml-review-board.',
+]
+
+
+BUSINESS_OPS = [
+    # Product decisions
+    'Product team decided to sunset the legacy checkout flow on 2026-04-15 after conversion rate analysis showed the new single-page checkout converts 12% better.',
+    'Roadmap update from Sarah: we are prioritizing mobile app push notifications for Q2 2026 because 60% of our active users are on mobile and engagement drops without re-engagement.',
+    'Feature flag for the new recommendation carousel was turned on for 20% of users on 2026-02-10. Early results show a 3% uplift in average order value.',
+    'Decision to deprecate API v1 for external partners communicated to all enterprise clients on 2026-01-20 with a 6-month migration window ending 2026-06-01.',
+    # Customer incidents/complaints
+    'Customer complaint from Acme Corp (ticket #4891): checkout keeps timing out for their European office users since Tuesday, affecting about 200 orders per day.',
+    'Support escalation: multiple customers reporting that login is failing intermittently since the Tuesday morning release. Customer success team flagged it as P1.',
+    'Enterprise client BigRetail reported that their bulk order import has been failing silently since 2026-03-05. Their operations team lost 3 days of inventory data.',
+    'NPS survey feedback summary for February 2026: score dropped from 42 to 31. Top complaint is page load times on product listings, mentioned by 38% of detractors.',
+    # Meeting notes
+    'Sprint retro notes 2026-03-15: team agreed deployment process is too slow, CI pipeline takes over 8 minutes. Action item for platform team to investigate build caching.',
+    'Architecture review meeting 2026-02-20: decision to move payment processing to its own dedicated database to isolate failures. Migration planned for Q2.',
+    'Security audit findings from 2026-01-25: auditors flagged that service-to-service communication is not encrypted in 3 internal services. Remediation deadline is end of March.',
+    'Quarterly business review 2026-03-20: CEO asked why the payments outage on March 12 was not detected earlier. VP Engineering committed to improving monitoring coverage.',
+    # Business metrics
+    'Conversion rate dropped 8% on 2026-03-13, the day after the payments infrastructure incident. Revenue impact estimated at $45K for that day alone.',
+    'Latency SLA breach reported for March 2026: payment processing p95 exceeded the 500ms target on 4 separate days, triggering a contractual review with BigRetail.',
+    'Monthly active users grew 15% in February 2026 after the launch of the referral program, but server costs increased 22% due to unexpected load on the recommendation engine.',
+    # Hiring/team
+    'Hired Maria Chen as Senior SRE starting 2026-04-01, specifically to improve observability and reduce mean time to detection for production incidents.',
+    'Data platform team expanded from 3 to 5 engineers in January 2026 to handle the growing pipeline complexity and reduce the backlog of data quality issues.',
+    # Vendor decisions
+    'Vendor decision memo: chose Datadog over New Relic for monitoring because of better Kubernetes integration and lower per-host pricing at our scale (47 services).',
+    # Compliance/legal
+    'GDPR audit scheduled for 2026-05-01. Legal team requires all services to implement data retention policies by end of April. Customer data older than 2 years must be anonymized.',
+    'SOC2 Type II preparation: compliance team identified 5 control gaps including lack of automated access reviews and missing audit trail for database schema changes.',
+]
+
+
 async def main():
     ark_home = os.environ.get("ARK_HOME", os.path.expanduser("~/.ark"))
     memory_dir = os.path.join(ark_home, "memory")
 
-    # Clear old data — tantivy index, embedding cache, and graph
-    print("Clearing old index, embeddings, and graph...")
+    # Preserve embedding cache as warm cache (skip re-embedding existing docs)
+    embed_db_path = os.path.join(memory_dir, "embeddings.db")
+    warm_cache_path = os.path.join(ark_home, "_embeddings_warm.db")
+    if os.path.exists(embed_db_path):
+        shutil.copy2(embed_db_path, warm_cache_path)
+        import sqlite3
+        n = sqlite3.connect(warm_cache_path).execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+        print(f"  Saved warm cache: {n} embeddings")
+
+    # Clear tantivy + graph (rebuild from scratch)
+    print("Clearing old index and graph...")
     if os.path.exists(memory_dir):
         shutil.rmtree(memory_dir)
     os.makedirs(memory_dir, exist_ok=True)
-    for db_file in ["embeddings.db", "graph.db"]:
-        p = os.path.join(ark_home, db_file)
-        if os.path.exists(p):
-            os.remove(p)
-            print(f"  Removed {db_file}")
+
+    # Restore warm cache
+    if os.path.exists(warm_cache_path):
+        shutil.move(warm_cache_path, embed_db_path)
+        print("  Restored warm embedding cache")
 
     # Force re-init with new model
     import ark.local as local
@@ -60,42 +151,39 @@ async def main():
     local._graph_store = None
 
     from ark.local import call_tool
+    import time
 
-    # Ingest engineering memories
-    print(f"Ingesting {len(ENGINEERING)} engineering memories...")
-    for i, text in enumerate(ENGINEERING):
-        await call_tool('ingest', {'content': text})
-        if (i + 1) % 10 == 0:
-            print(f"  [{i+1}/{len(ENGINEERING)}]")
-
-    # Ingest noise from seed_noise.py
-    print("Ingesting 150 noise memories...")
+    # Collect all doc lists
     from seed_noise import NOISE
-    for i, text in enumerate(NOISE):
-        await call_tool('ingest', {'content': text})
-        if (i + 1) % 50 == 0:
-            print(f"  [{i+1}/{len(NOISE)}]")
-
-    # Ingest AG News noise
-    print("Ingesting 500 AG News memories...")
     with open('ag_news_noise.json') as f:
         ag_news = json.load(f)
-    for i, text in enumerate(ag_news):
-        await call_tool('ingest', {'content': text})
-        if (i + 1) % 100 == 0:
-            print(f"  [{i+1}/{len(ag_news)}]")
-
-    # Ingest tech news noise
-    print("Ingesting 500 tech news memories...")
     with open('tech_noise.json') as f:
         tech_news = json.load(f)
-    for i, text in enumerate(tech_news):
-        await call_tool('ingest', {'content': text})
-        if (i + 1) % 100 == 0:
-            print(f"  [{i+1}/{len(tech_news)}]")
 
-    total = len(ENGINEERING) + len(NOISE) + len(ag_news) + len(tech_news)
-    print(f"\nDone: {total} memories ingested with nomic-embed-text-v1.5 (768d)")
+    groups = [
+        ("engineering", ENGINEERING),
+        ("infra/ops", ENGINEERING_INFRA),
+        ("data/backend", ENGINEERING_DATA),
+        ("business/ops", BUSINESS_OPS),
+        ("noise", NOISE),
+        ("AG News", ag_news),
+        ("tech news", tech_news),
+    ]
+
+    t0 = time.time()
+    total = 0
+    for label, texts in groups:
+        print(f"Ingesting {len(texts)} {label} memories...")
+        for i, text in enumerate(texts):
+            await call_tool('ingest', {'content': text})
+            if (i + 1) % 100 == 0:
+                elapsed = time.time() - t0
+                print(f"  [{i+1}/{len(texts)}] ({elapsed:.0f}s elapsed)")
+        total += len(texts)
+
+    n_eng = len(ENGINEERING) + len(ENGINEERING_INFRA) + len(ENGINEERING_DATA) + len(BUSINESS_OPS)
+    elapsed = time.time() - t0
+    print(f"\nDone: {total} memories ingested ({n_eng} engineering + {total - n_eng} noise) in {elapsed:.0f}s")
 
     # Verify
     r = await call_tool('search', {'query': 'JWT tokens'})

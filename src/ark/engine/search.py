@@ -21,6 +21,7 @@ from ark.engine.index import (
     F_ATTRIBUTES, F_CHUNK_ATTRIBUTES, F_CHUNK_BODY, F_CHUNK_ID,
     F_CHUNK_TOKENS, F_CORPUS, F_ID, F_SOURCE_ID,
 )
+from ark.engine.temporal import detect_query_dates, detect_query_period_ids, temporal_proximity_score
 from ark.engine.tokenizer import tokenize_text
 from ark.engine.types import SearchErr, SearchHit, SearchParams, SearchScores
 
@@ -38,6 +39,7 @@ _ACCESS_BOOST_STEP = 0.02
 _PRF_DOCS = 3          # number of top cosine hits to extract terms from
 _PRF_TERMS = 12        # max terms to extract for pseudo-relevance feedback
 _PRF_MIN_SIM = 0.35    # minimum cosine similarity to consider a doc for PRF
+_TEMPORAL_WEIGHT = 1.5  # weight for temporal signal in RRF (only active when query has dates)
 
 
 class Searcher:
@@ -64,10 +66,12 @@ class Searcher:
         source_ids: list[str] | None = None,
         params: SearchParams | None = None,
         expanded_query: str | None = None,
+        agent_id: str = "default",
     ) -> Result[list[SearchHit], SearchErr]:
         if params is None:
             params = SearchParams()
 
+        query_date_ranges = detect_query_dates(query)
         query_vec = None
 
         # ── Signal 1: Full-precision cosine via embedding cache ──
@@ -131,10 +135,38 @@ class Searcher:
             exp_results = searcher.search(exp_query, limit=params.num_to_score)
             bm25_expanded_docs = [(score, searcher.doc(addr)) for score, addr in exp_results.hits]
 
+        # ── Temporal candidate injection via hypergraph period nodes ──
+        if query_date_ranges and self._graph_store is not None and self._embed_cache is not None:
+            period_ids = detect_query_period_ids(query)
+            if period_ids:
+                temporal_doc_ids: set[str] = set()
+                for pid in period_ids:
+                    for doc_id, _, _ in self._graph_store.get_predecessors(
+                        pid, edge_types={"occurred_in"}, limit=50
+                    ):
+                        temporal_doc_ids.add(doc_id)
+                # Add any temporal docs not already in cosine results
+                existing_ids = {did for did, _ in cosine_results}
+                new_temporal = temporal_doc_ids - existing_ids
+                if new_temporal:
+                    for doc_id in new_temporal:
+                        vec = self._embed_cache.get(doc_id)
+                        if vec is not None and query_vec is not None:
+                            import numpy as np
+                            qv = np.array(query_vec, dtype=np.float32)
+                            dv = np.array(vec, dtype=np.float32)
+                            qn = np.linalg.norm(qv)
+                            dn = np.linalg.norm(dv)
+                            if qn > 1e-12 and dn > 1e-12:
+                                sim = float(np.dot(qv, dv) / (qn * dn))
+                                cosine_results.append((doc_id, sim))
+
         # ── Merge: RRF with score-weighted BM25 ──
         hits = _rrf_merge(cosine_results, bm25_docs, searcher, self._schema,
                           params, self._embed_cache,
-                          bm25_expanded_docs=bm25_expanded_docs)
+                          bm25_expanded_docs=bm25_expanded_docs,
+                          agent_id=agent_id,
+                          query_date_ranges=query_date_ranges)
 
         # ── Graph expansion ──
         if self._graph_store is not None and self._embed_cache is not None and query_vec is not None:
@@ -246,6 +278,22 @@ def _doc_json(doc, field):
     return v if isinstance(v, dict) else None
 
 
+def _get_doc_dates(doc_id, searcher, schema) -> list[str]:
+    """Look up extracted_dates from a doc's attributes in tantivy."""
+    try:
+        query = tantivy.Query.term_query(schema, F_ID, doc_id)
+        hits = searcher.search(query, limit=1).hits
+        if not hits:
+            return []
+        doc = searcher.doc(hits[0][1])
+        attrs = _doc_json(doc, F_ATTRIBUTES)
+        if attrs:
+            return attrs.get("extracted_dates", [])
+    except Exception:
+        pass
+    return []
+
+
 def _compute_decay(access_count, last_accessed):
     now = datetime.now(UTC)
     if last_accessed:
@@ -265,7 +313,7 @@ _EXPANDED_BM25_WEIGHT = 0.5  # weight multiplier for LLM-expanded BM25 terms
 
 
 def _rrf_merge(cosine_results, bm25_docs, searcher, schema, params, embed_cache=None,
-               bm25_expanded_docs=None):
+               bm25_expanded_docs=None, agent_id="default", query_date_ranges=None):
     """Merge full-precision cosine results with BM25 results via score-weighted RRF.
 
     cosine_results: list of (doc_id, cosine_similarity) from embedding cache
@@ -330,11 +378,32 @@ def _rrf_merge(cosine_results, bm25_docs, searcher, schema, params, embed_cache=
             else:
                 scored[doc_id] = (SearchScores(rrf=rrf, embedding=0.0, bm25=raw_score), 0.0)
 
+    # ── Signal 3: Temporal proximity (only when query has date references) ──
+    if query_date_ranges and scored:
+        # Collect attributes for all candidate docs to get extracted_dates
+        all_doc_ids = list(scored.keys())
+        for doc_id in all_doc_ids:
+            doc_dates = _get_doc_dates(doc_id, searcher, schema)
+            if not doc_dates:
+                continue
+            tscore = temporal_proximity_score(doc_dates, query_date_ranges)
+            if tscore > 0:
+                old_scores, cosine_sim = scored[doc_id]
+                temporal_rrf = _TEMPORAL_WEIGHT * tscore
+                scored[doc_id] = (
+                    SearchScores(
+                        rrf=old_scores.rrf + temporal_rrf,
+                        embedding=old_scores.embedding,
+                        bm25=old_scores.bm25,
+                    ),
+                    cosine_sim,
+                )
+
     # Apply decay (skip if ARK_NO_DECAY is set — for deterministic benchmarking)
     if embed_cache is not None and not os.environ.get("ARK_NO_DECAY"):
         doc_ids = [d for d in scored if d]
         if doc_ids:
-            meta = embed_cache.get_decay_metadata(doc_ids)
+            meta = embed_cache.get_decay_metadata(doc_ids, agent_id=agent_id)
             for did, (ac, la) in meta.items():
                 if did in scored:
                     factor = _compute_decay(ac, la)

@@ -14,6 +14,7 @@ from ark.engine.result import Error, Ok, Result
 from ark.engine.embed import Embedding, embed_batch
 from ark.engine.embedding_cache import EmbeddingCache
 from ark.engine.tokenizer import Chunker, TextChunker, tokenize_text
+from ark.engine.temporal import extract_dates, dates_to_periods
 from ark.engine.types import IndexDoc, IndexErr
 
 log = logging.getLogger(__name__)
@@ -114,13 +115,29 @@ class Indexer:
         n = 0
         failed = 0
 
-        # Use document prefix for indexing if available
-        embed_doc = getattr(self._embedding, 'embed_document', None)
-        if embed_doc is not None:
-            coros = [embed_doc(chunk) for chunk in chunks]
-            embed_results = await asyncio.gather(*coros)
+        # Extract dates from doc body and store in attributes
+        doc_dates = extract_dates(doc.body)
+        if doc_dates:
+            if doc.attributes is None:
+                doc.attributes = {}
+            doc.attributes["extracted_dates"] = doc_dates
+
+        # Check if embedding already cached (warm cache from previous run)
+        cached_vec = self._embed_cache.get(doc.id) if self._embed_cache is not None else None
+
+        if cached_vec is not None:
+            # Already embedded — skip API call, just index into tantivy
+            embed_results = [Ok(cached_vec)] + [Ok(cached_vec)] * (len(chunks) - 1)
+            log.debug(f"warm cache hit for {doc.id}")
         else:
-            embed_results = await embed_batch(self._embedding, chunks)
+            # Use document prefix for indexing if available
+            embed_doc = getattr(self._embedding, 'embed_document', None)
+            if embed_doc is not None:
+                coros = [embed_doc(chunk) for chunk in chunks]
+                embed_results = await asyncio.gather(*coros)
+            else:
+                embed_results = await embed_batch(self._embedding, chunks)
+            log.debug(f"fresh embed for {doc.id}: ok={embed_results[0].is_ok() if embed_results else 'empty'}")
 
         for i, body in enumerate(chunks):
             cid = f"{doc.id}-{i}"
@@ -130,7 +147,7 @@ class Indexer:
             if result.is_err():
                 failed += 1
 
-            if self._embed_cache is not None and result.is_ok():
+            if self._embed_cache is not None and result.is_ok() and cached_vec is None:
                 raw_vec = result.unwrap()
                 # Dedup check — skip if very similar content already exists
                 sim = self._embed_cache.max_cosine_similarity(raw_vec, doc.corpus)
@@ -172,6 +189,13 @@ class Indexer:
         if self._graph_store is not None and doc.attributes:
             self._write_source_edges(doc)
 
+        # Create temporal hypergraph edges: doc → period nodes
+        if self._graph_store is not None and doc_dates:
+            periods = dates_to_periods(doc_dates)
+            edges = [(doc.id, pid, "occurred_in", doc.corpus, 1.0) for pid in periods]
+            if edges:
+                self._graph_store.add_edges_batch(edges)
+
         return Ok(n)
 
     def _write_source_edges(self, doc: IndexDoc) -> None:
@@ -195,9 +219,12 @@ class Indexer:
     def commit(self) -> Result[None, IndexErr]:
         try:
             self._writer.commit()
-            self._writer.wait_merging_threads()
-            self._writer = self._index.writer()
-            self._index.reload()
-            return Ok(None)
         except Exception as e:
             return Error(IndexErr(code="commit_error", message=str(e)))
+        try:
+            self._writer.wait_merging_threads()
+        except Exception:
+            pass  # writer consumed after commit — safe to ignore
+        self._writer = self._index.writer()
+        self._index.reload()
+        return Ok(None)

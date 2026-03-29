@@ -40,6 +40,16 @@ class EmbeddingCache:
             CREATE INDEX IF NOT EXISTS idx_embeddings_corpus
             ON embeddings(corpus)
         """)
+        # Per-agent access tracking (decay/boost scoped per agent)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS doc_access (
+                doc_id        TEXT NOT NULL,
+                agent_id      TEXT NOT NULL,
+                access_count  INTEGER NOT NULL DEFAULT 0,
+                last_accessed TEXT,
+                PRIMARY KEY (doc_id, agent_id)
+            )
+        """)
         self._migrate()
         self._conn.commit()
 
@@ -87,8 +97,18 @@ class EmbeddingCache:
             row = self._conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()
         return row[0] if row else 0
 
-    def touch(self, doc_id: str) -> None:
+    def touch(self, doc_id: str, agent_id: str = "default") -> None:
         now = datetime.now(UTC).isoformat()
+        # Per-agent access tracking
+        self._conn.execute(
+            """INSERT INTO doc_access (doc_id, agent_id, access_count, last_accessed)
+               VALUES (?, ?, 1, ?)
+               ON CONFLICT(doc_id, agent_id) DO UPDATE SET
+                   access_count = access_count + 1,
+                   last_accessed = excluded.last_accessed""",
+            (doc_id, agent_id, now),
+        )
+        # Keep legacy global counter in sync for backward compat
         self._conn.execute(
             "UPDATE embeddings SET access_count = access_count + 1, last_accessed = ? WHERE doc_id = ?",
             (now, doc_id),
@@ -96,16 +116,22 @@ class EmbeddingCache:
         self._conn.commit()
 
     def get_decay_metadata(
-        self, doc_ids: list[str]
+        self, doc_ids: list[str], agent_id: str = "default"
     ) -> dict[str, tuple[int, str | None]]:
         if not doc_ids:
             return {}
         placeholders = ",".join("?" for _ in doc_ids)
+        # Per-agent access data; falls back to 0 access for docs the agent hasn't touched
         rows = self._conn.execute(
-            f"SELECT doc_id, access_count, last_accessed FROM embeddings WHERE doc_id IN ({placeholders})",
-            doc_ids,
+            f"SELECT doc_id, access_count, last_accessed FROM doc_access WHERE agent_id = ? AND doc_id IN ({placeholders})",
+            [agent_id] + doc_ids,
         ).fetchall()
-        return {row[0]: (row[1], row[2]) for row in rows}
+        result = {row[0]: (row[1], row[2]) for row in rows}
+        # For docs this agent hasn't accessed, return (0, None) so decay still applies by age
+        for doc_id in doc_ids:
+            if doc_id not in result:
+                result[doc_id] = (0, None)
+        return result
 
     def get_many(self, doc_ids: list[str]) -> dict[str, list[float]]:
         if not doc_ids:

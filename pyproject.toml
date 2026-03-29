@@ -17,6 +17,7 @@ dependencies = [
     "msgspec>=0.18",
     "semantic-text-splitter>=0.13",
     "fastembed>=0.8.0",
+    "datasets>=4.8.4",
 ]
 
 [project.optional-dependencies]
