@@ -44,28 +44,41 @@ def _select_menu(items: list[dict], label_key: str, detail_key: str, current_idx
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
-    idx = current_idx
-
-    while True:
-        # Clear and redraw
+    def _draw(idx: int) -> None:
         for i, item in enumerate(items):
             if i == idx:
                 console.print(f"  [bold cyan]> {i+1}. {item[label_key]}[/]  [dim]{item[detail_key]}[/]")
             else:
                 console.print(f"    {i+1}. [dim]{item[label_key]}[/]  [dim]{item[detail_key]}[/]")
 
+    idx = current_idx
+    _draw(idx)
+
+    while True:
         key = _read_key()
         if key == 'up':
             idx = (idx - 1) % len(items)
         elif key == 'down':
             idx = (idx + 1) % len(items)
         elif key == 'enter':
+            # Redraw final state clean
+            sys.stdout.write(f"\x1b[{len(items)}A\x1b[J")
+            sys.stdout.flush()
+            _draw(idx)
             return idx
         elif key.isdigit() and 1 <= int(key) <= len(items):
-            return int(key) - 1
+            idx = int(key) - 1
+            sys.stdout.write(f"\x1b[{len(items)}A\x1b[J")
+            sys.stdout.flush()
+            _draw(idx)
+            return idx
+        else:
+            continue
 
-        # Move cursor up to redraw
-        console.print(f"\033[{len(items)}A", end="")
+        # Move cursor up and clear, then redraw
+        sys.stdout.write(f"\x1b[{len(items)}A\x1b[J")
+        sys.stdout.flush()
+        _draw(idx)
 
 CONFIG_PATH = Path.home() / ".ark" / "config.json"
 
