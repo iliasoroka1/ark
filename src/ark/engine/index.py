@@ -13,7 +13,7 @@ import asyncio
 from ark.engine.result import Error, Ok, Result
 from ark.engine.embed import Embedding, embed_batch
 from ark.engine.embedding_cache import EmbeddingCache
-from ark.engine.tokenizer import Chunker, TextChunker, tokenize_text
+from ark.engine.tokenizer import Chunker, SmartChunker, tokenize_text
 from ark.engine.temporal import extract_dates, dates_to_periods
 from ark.engine.types import IndexDoc, IndexErr
 
@@ -77,7 +77,7 @@ class Indexer:
     ) -> None:
         self._schema = build_schema()
         self._embedding = embedding
-        self._chunker = chunker or TextChunker()
+        self._chunker = chunker or SmartChunker()
         self._graph_store = graph_store
         if path is not None:
             p = Path(path)
@@ -122,15 +122,30 @@ class Indexer:
                 doc.attributes = {}
             doc.attributes["extracted_dates"] = doc_dates
 
-        # Check if embedding already cached (warm cache from previous run)
+        # Check if embeddings already cached (warm cache from previous run)
+        # For multi-chunk docs, check if chunk 0 is cached as indicator
         cached_vec = self._embed_cache.get(doc.id) if self._embed_cache is not None else None
+        # Also check chunk-level cache for multi-chunk docs
+        chunk_cached = cached_vec is not None
+        if chunk_cached and len(chunks) > 1 and self._embed_cache is not None:
+            # Verify all chunks are cached
+            chunk_cached = all(
+                self._embed_cache.get(f"{doc.id}-{i}") is not None
+                for i in range(len(chunks))
+            )
 
-        if cached_vec is not None:
-            # Already embedded — skip API call, just index into tantivy
-            embed_results = [Ok(cached_vec)] + [Ok(cached_vec)] * (len(chunks) - 1)
-            log.debug(f"warm cache hit for {doc.id}")
+        if chunk_cached:
+            # All chunks cached — load from cache
+            embed_results = []
+            for i in range(len(chunks)):
+                cid = f"{doc.id}-{i}"
+                cv = self._embed_cache.get(cid) if i > 0 or len(chunks) == 1 else None
+                if cv is None:
+                    cv = self._embed_cache.get(doc.id)
+                embed_results.append(Ok(cv) if cv is not None else Error("cache miss"))
+            log.debug(f"warm cache hit for {doc.id} ({len(chunks)} chunks)")
         else:
-            # Use document prefix for indexing if available
+            # Fresh embedding for all chunks
             embed_doc = getattr(self._embedding, 'embed_document', None)
             if embed_doc is not None:
                 coros = [embed_doc(chunk) for chunk in chunks]
@@ -147,15 +162,19 @@ class Indexer:
             if result.is_err():
                 failed += 1
 
-            if self._embed_cache is not None and result.is_ok() and cached_vec is None:
+            if self._embed_cache is not None and result.is_ok() and not chunk_cached:
                 raw_vec = result.unwrap()
                 # Dedup check — skip if very similar content already exists
                 sim = self._embed_cache.max_cosine_similarity(raw_vec, doc.corpus)
                 if sim >= DEDUP_THRESHOLD:
                     continue
-                # Cache embedding after dedup check passes
+                # Cache embedding for EVERY chunk (not just chunk 0)
+                # doc.id stores chunk 0 vector (backward compat for single-chunk docs)
+                # doc.id-N stores each chunk's vector for multi-chunk retrieval
                 if i == 0:
                     self._embed_cache.put(doc.id, doc.corpus, raw_vec)
+                if len(chunks) > 1:
+                    self._embed_cache.put(cid, doc.corpus, raw_vec)
 
             all_tokens = word_tokens
 

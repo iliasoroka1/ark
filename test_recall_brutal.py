@@ -305,6 +305,12 @@ TANGENTIAL = [
     TestQuery("how are errors handled in our APIs", "tangential", [ERRORS]),
     TestQuery("what authentication providers do we use", "tangential", [OAUTH, SSO]),
     TestQuery("database performance and optimization", "tangential", [MATVIEW, INDEX, REPLICATION]),
+    # new
+    TestQuery("customer-facing product changes and roadmap items", "tangential", [BIZ_CHECKOUT_SUNSET, BIZ_MOBILE_ROADMAP, BIZ_REC_CAROUSEL]),
+    TestQuery("business impact incidents and revenue losses", "tangential", [BIZ_CONVERSION_DROP, BIZ_SLA_BREACH, BIZ_LOGIN_FAILING]),
+    TestQuery("infrastructure and health service level agreements", "tangential", [K8S_HPA, RESOURCE_LIMITS]),
+    TestQuery("operational metrics and performance baselines", "tangential", [OTEL_COLLECTOR, GRAFANA_DASH]),
+    TestQuery("security compliance and audit requirements", "tangential", [BIZ_GDPR, BIZ_SOC2]),
 ]
 
 ADVERSARIAL = [
@@ -338,6 +344,17 @@ NEGATIVE = [
     TestQuery("stock market performance in 2023", "negative", [], is_negative=True),
     TestQuery("how do volcanoes form", "negative", [], is_negative=True),
     TestQuery("Beethoven symphony compositions", "negative", [], is_negative=True),
+    # new
+    TestQuery("best practices for maintaining a coal mining operation", "negative", [], is_negative=True),
+    TestQuery("how to bake a chocolate chip cookie", "negative", [], is_negative=True),
+    TestQuery("baseball statistics for the 2025 World Series", "negative", [], is_negative=True),
+    TestQuery("how to care for a pet hamster", "negative", [], is_negative=True),
+    TestQuery("climate change policy in Scandinavian countries", "negative", [], is_negative=True),
+    TestQuery("Renaissance art movements and the Sistine Chapel", "negative", [], is_negative=True),
+    TestQuery("quantum entanglement in theoretical physics", "negative", [], is_negative=True),
+    TestQuery("how to write a haiku poem", "negative", [], is_negative=True),
+    TestQuery("organic gardening tips for tomato plants", "negative", [], is_negative=True),
+    TestQuery("history of jazz music in New Orleans", "negative", [], is_negative=True),
 ]
 
 MULTIHOP = [
@@ -346,6 +363,17 @@ MULTIHOP = [
     TestQuery("how did we improve database query speed", "multihop", [MATVIEW, INDEX]),
     TestQuery("what happens when a user session expires", "multihop", [SESSION, BUG, JWT]),
     TestQuery("our complete deployment and monitoring pipeline", "multihop", [CART, AUTOSCALE, DATADOG]),
+    # new
+    TestQuery("what caused the conversion rate drop after the payments outage", "multihop", [BIZ_CONVERSION_DROP, INCIDENT]),
+    TestQuery("how does the RBAC setup connect to the SOC2 control gaps on access reviews", "multihop", [K8S_RBAC, BIZ_SOC2]),
+    TestQuery("could the Redis cache TTL explain the NPS complaints about page load times", "multihop", [REDIS, BIZ_NPS_DROP]),
+    TestQuery("what monitoring would alert us if the dbt freshness check fails and data quality degrades", "multihop", [DBT_FRESHNESS, MONTE_CARLO]),
+    TestQuery("how did the new SRE hire relate to improving detection time the CEO asked about", "multihop", [BIZ_HIRE_SRE, BIZ_QBR]),
+    TestQuery("what Terraform approval process protects the Vault secrets infrastructure", "multihop", [TF_WORKSPACES, VAULT_SECRETS]),
+    TestQuery("if the Kafka order lag alert fires how does that affect the payment webhook retries", "multihop", [KAFKA_ORDER_LAG, CELERY_RETRY]),
+    TestQuery("how does the circuit breaker on payments relate to the Acme Corp checkout timeout issue", "multihop", [CIRCUIT_BREAKER, BIZ_ACME_TIMEOUT]),
+    TestQuery("did the materialized view optimization help with the BigRetail import performance problem", "multihop", [MATVIEW, BIZ_BIGRETAIL_IMPORT]),
+    TestQuery("what's the relationship between the migration audit log and the GDPR data retention requirement", "multihop", [MIGRATION, BIZ_GDPR]),
 ]
 
 # NEW: Lexical traps — queries where common words match noise harder than our memories
@@ -380,6 +408,22 @@ LEXICAL_TRAPS = [
     TestQuery("automated testing and code quality", "lexical_trap",
               [CODEREVIEW],
               "'testing' and 'code quality' match dev tool news"),
+    # new
+    TestQuery("customer growth and business expansion", "lexical_trap",
+              [BIZ_MAU_GROWTH],
+              "'growth' and 'expansion' match startup news everywhere"),
+    TestQuery("hiring and team scaling", "lexical_trap",
+              [BIZ_HIRE_SRE, BIZ_DATA_TEAM],
+              "'hiring' matches every tech company press release"),
+    TestQuery("security and compliance review", "lexical_trap",
+              [BIZ_SECURITY_AUDIT, BIZ_SOC2, BIZ_GDPR],
+              "'security audit' matches enterprise security news"),
+    TestQuery("vendor selection and infrastructure choice", "lexical_trap",
+              [BIZ_VENDOR_DATADOG],
+              "'vendor selection' matches enterprise IT news"),
+    TestQuery("container orchestration and cluster management", "lexical_trap",
+              [K8S_HPA, K8S_RBAC, NS_STRATEGY],
+              "'cluster management' matches generic k8s news"),
 ]
 
 # NEW: Compositional — require finding 2+ specific memories and recognizing they're related
@@ -414,6 +458,22 @@ COMPOSITIONAL = [
     TestQuery("incident response: what happened and how we prevent it", "compositional",
               [INCIDENT, REPLICATION, DATADOG, ONCALL],
               "postmortem + replication + monitoring + on-call"),
+    # new
+    TestQuery("our kubernetes cluster setup and access control", "compositional",
+              [K8S_HPA, K8S_RBAC, NS_STRATEGY],
+              "HPA + RBAC + namespaces"),
+    TestQuery("complete observability stack for all services", "compositional",
+              [OTEL_COLLECTOR, GRAFANA_DASH, LOG_AGG],
+              "telemetry collector + grafana dashboard + log aggregation"),
+    TestQuery("secrets management and rotation across the platform", "compositional",
+              [VAULT_SECRETS, SEALED_SECRETS, SECRET_ROTATION],
+              "Vault + Sealed Secrets + rotation schedule"),
+    TestQuery("terraform infrastructure as code with state management", "compositional",
+              [TF_STATE, TF_MODULES, TF_WORKSPACES],
+              "S3 state + module versions + workspace setup"),
+    TestQuery("end-to-end CI/CD pipeline with caching and gates", "compositional",
+              [GH_ACTIONS_CI, BUILD_CACHE, DEPLOY_GATES],
+              "GitHub Actions + Docker cache + Argo CD gates"),
 ]
 
 # 9. Temporal — time-specific queries requiring date awareness
@@ -498,6 +558,12 @@ CONVERSATIONAL = [
     TestQuery("do we have any audit logging", "conversational",
               [MIGRATION],
               "047_add_audit_log_table"),
+    # new
+    TestQuery("wait, didn't we just spin down that old checkout thing", "conversational", [BIZ_CHECKOUT_SUNSET]),
+    TestQuery("there's something about people on phones not getting notified right", "conversational", [BIZ_MOBILE_ROADMAP]),
+    TestQuery("wasn't there a customer complaining about timeouts in Europe", "conversational", [BIZ_ACME_TIMEOUT]),
+    TestQuery("our NPS tanked like a month ago, something about loading", "conversational", [BIZ_NPS_DROP]),
+    TestQuery("the big box store import just stopped working out of nowhere", "conversational", [BIZ_BIGRETAIL_IMPORT]),
 ]
 
 # 11. Synonym hell — ZERO lexical overlap with source memories
@@ -532,6 +598,12 @@ SYNONYM_HELL = [
     TestQuery("ephemeral credential rotation defect", "synonym_hell",
               [BUG],
               "login bug expired JWT refresh — security jargon"),
+    # new
+    TestQuery("legacy transaction checkout module sunset", "synonym_hell", [BIZ_CHECKOUT_SUNSET]),
+    TestQuery("mobile engagement activation for low-bandwidth devices", "synonym_hell", [BIZ_MOBILE_ROADMAP]),
+    TestQuery("geographical latency mitigation for transatlantic commerce", "synonym_hell", [BIZ_ACME_TIMEOUT]),
+    TestQuery("customer satisfaction metric deterioration investigation", "synonym_hell", [BIZ_NPS_DROP]),
+    TestQuery("supply chain integration failure escalation", "synonym_hell", [BIZ_BIGRETAIL_IMPORT]),
 ]
 
 # 12. Precision — must return exactly ONE specific memory, not related ones
@@ -616,6 +688,17 @@ NEGATION = [
     TestQuery("database work besides the audit log migration", "negation",
               [MATVIEW, INDEX, REPLICATION],
               "should find matview/index/replication, NOT migration"),
+    # new
+    TestQuery("authentication methods besides OAuth and SSO", "negation", [JWT, SESSION, MFA]),
+    TestQuery("caching solutions that aren't Redis", "negation", [MATVIEW, FEAST_FEATURES]),
+    TestQuery("security tools other than Vault and Sealed Secrets", "negation", [ISTIO_MTLS, K8S_RBAC]),
+    TestQuery("monitoring not using Datadog", "negation", [GRAFANA_DASH, OTEL_COLLECTOR]),
+    TestQuery("Kafka topics not related to user activity or orders", "negation", [KAFKA_CLICKSTREAM]),
+    TestQuery("deployment strategies excluding canary and manual approval", "negation", [DEPLOY_GATES, ARGOCD]),
+    TestQuery("incident response without PagerDuty", "negation", [DATADOG, INCIDENT]),
+    TestQuery("data pipeline tools excluding Airflow and dbt", "negation", [FIVETRAN_CUSTOMER]),
+    TestQuery("API versioning without v1 sunset", "negation", [VERSIONING, BIZ_APIV1_DEPREC]),
+    TestQuery("Kubernetes networking not using Istio", "negation", [NS_STRATEGY]),
 ]
 
 # 14. Cross-domain — connecting facts across different engineering areas
@@ -685,6 +768,17 @@ NEEDLE = [
     TestQuery("v1 API sunset date", "needle",
               [VERSIONING],
               "specific detail: v1 sunset 2026-06-01"),
+    # new
+    TestQuery("what is the exact CPU limit per pod", "needle", [RESOURCE_LIMITS]),
+    TestQuery("what is the AWS IAM dynamic secret TTL in Vault", "needle", [VAULT_SECRETS]),
+    TestQuery("what was the Sealed Secrets key rotation date", "needle", [SEALED_SECRETS]),
+    TestQuery("what is the default cursor pagination page size", "needle", [PAGINATION]),
+    TestQuery("how many replicas does the cart-service have", "needle", [CART]),
+    TestQuery("what is the BigRetail SLA p95 threshold that was breached", "needle", [BIZ_SLA_BREACH]),
+    TestQuery("how many story points in the sprint plan", "needle", [SPRINT]),
+    TestQuery("what's the response error code structure", "needle", [ERRORS]),
+    TestQuery("what is the Envoy rate limit ConfigMap name", "needle", [ENVOY]),
+    TestQuery("how long is the scale-down stabilization for HPA", "needle", [K8S_HPA]),
 ]
 
 # ── Business/ops queries ──
@@ -695,6 +789,17 @@ BIZ_EXACT = [
     TestQuery("chose Datadog over New Relic for monitoring", "biz_exact", [BIZ_VENDOR_DATADOG]),
     TestQuery("GDPR audit scheduled for 2026-05-01", "biz_exact", [BIZ_GDPR]),
     TestQuery("sprint retro: CI pipeline takes over 8 minutes", "biz_exact", [BIZ_RETRO]),
+    # new
+    TestQuery("Acme Corp ticket #4891 checkout timing out European users", "biz_exact", [BIZ_ACME_TIMEOUT]),
+    TestQuery("login failing intermittently since Tuesday release P1", "biz_exact", [BIZ_LOGIN_FAILING]),
+    TestQuery("BigRetail bulk order import failing since 2026-03-05 3 days inventory lost", "biz_exact", [BIZ_BIGRETAIL_IMPORT]),
+    TestQuery("conversion rate dropped 8 percent on 2026-03-13 45K revenue impact", "biz_exact", [BIZ_CONVERSION_DROP]),
+    TestQuery("p95 response time exceeded 500 milliseconds 4 days in March BigRetail contractual review", "biz_exact", [BIZ_SLA_BREACH]),
+    TestQuery("sunset legacy checkout 2026-04-15 new single-page converts 12 percent better", "biz_exact", [BIZ_CHECKOUT_SUNSET]),
+    TestQuery("recommendation carousel 20 percent users 2026-02-10 3 percent uplift AOV", "biz_exact", [BIZ_REC_CAROUSEL]),
+    TestQuery("Q2 2026 push notifications 60 percent mobile users engagement drops", "biz_exact", [BIZ_MOBILE_ROADMAP]),
+    TestQuery("MAU increased 15 percent February 2026 referral program server costs up 22 percent", "biz_exact", [BIZ_MAU_GROWTH]),
+    TestQuery("SOC2 Type II 5 control gaps access reviews audit trail schema changes", "biz_exact", [BIZ_SOC2]),
 ]
 
 BIZ_PARAPHRASE = [
@@ -713,6 +818,17 @@ BIZ_PARAPHRASE = [
     TestQuery("are we hiring for reliability engineering", "biz_paraphrase",
               [BIZ_HIRE_SRE],
               "SRE hire rephrased in business terms"),
+    # new
+    TestQuery("why are European customers unable to complete orders on time", "biz_paraphrase", [BIZ_ACME_TIMEOUT]),
+    TestQuery("what authentication problems started after the recent production release", "biz_paraphrase", [BIZ_LOGIN_FAILING]),
+    TestQuery("how did we lose three days worth of customer order data", "biz_paraphrase", [BIZ_BIGRETAIL_IMPORT]),
+    TestQuery("what performance issue drove down customer satisfaction last month", "biz_paraphrase", [BIZ_NPS_DROP]),
+    TestQuery("why did our sales revenue drop significantly in March", "biz_paraphrase", [BIZ_CONVERSION_DROP]),
+    TestQuery("how did we fail to meet our SLA commitments with major customers", "biz_paraphrase", [BIZ_SLA_BREACH]),
+    TestQuery("what is the timeline for transitioning to the new checkout system", "biz_paraphrase", [BIZ_CHECKOUT_SUNSET]),
+    TestQuery("what business impact did the recommendation feature launch have", "biz_paraphrase", [BIZ_REC_CAROUSEL]),
+    TestQuery("what should we prioritize for mobile users next quarter", "biz_paraphrase", [BIZ_MOBILE_ROADMAP]),
+    TestQuery("how is the growth from our referral campaign affecting operations", "biz_paraphrase", [BIZ_MAU_GROWTH]),
 ]
 
 BIZ_CROSS_DOMAIN = [
@@ -731,6 +847,17 @@ BIZ_CROSS_DOMAIN = [
     TestQuery("login issues reported by customers and the technical root cause", "biz_cross_domain",
               [BIZ_LOGIN_FAILING, BUG],
               "customer complaint about login + engineering JWT refresh bug"),
+    # new
+    TestQuery("what technical issue caused the European checkout failures and how do we prevent it", "biz_cross_domain", [BIZ_ACME_TIMEOUT, REDIS, AUTOSCALE]),
+    TestQuery("why did the post-release login failures hurt our customer satisfaction metrics", "biz_cross_domain", [BIZ_LOGIN_FAILING, JWT, SESSION]),
+    TestQuery("what systems failed during the March 12 outage and how should we isolate payments", "biz_cross_domain", [BIZ_QBR, INCIDENT, CIRCUIT_BREAKER]),
+    TestQuery("how did database performance issues contribute to the conversion rate drop", "biz_cross_domain", [BIZ_CONVERSION_DROP, MATVIEW, INDEX]),
+    TestQuery("what caused the sustained performance degradation and SLA breaches", "biz_cross_domain", [BIZ_SLA_BREACH, DATADOG, K8S_HPA]),
+    TestQuery("how are our caching and auto-scaling strategies affecting page load times", "biz_cross_domain", [BIZ_NPS_DROP, REDIS, AUTOSCALE]),
+    TestQuery("what observability improvements would help us detect incidents faster", "biz_cross_domain", [BIZ_HIRE_SRE, GRAFANA_DASH, OTEL_COLLECTOR]),
+    TestQuery("how does the import pipeline reliability affect inventory management for partners", "biz_cross_domain", [BIZ_BIGRETAIL_IMPORT, CELERY_DLQ, AIRFLOW_ETL]),
+    TestQuery("what security controls are missing for our compliance requirements", "biz_cross_domain", [BIZ_SOC2, VAULT_SECRETS, ISTIO_MTLS]),
+    TestQuery("how do our data quality systems support billing and reporting reliability", "biz_cross_domain", [BIZ_CONVERSION_DROP, MONTE_CARLO, DBT_FRESHNESS]),
 ]
 
 BIZ_ADVERSARIAL = [
@@ -743,6 +870,19 @@ BIZ_ADVERSARIAL = [
     TestQuery("compliance requirements for data handling", "biz_adversarial",
               [BIZ_GDPR, BIZ_SOC2],
               "'compliance' and 'data handling' match regulatory news"),
+    # new
+    TestQuery("payment system failures and revenue impact during business hours", "biz_adversarial", [BIZ_CONVERSION_DROP, INCIDENT, BIZ_QBR]),
+    TestQuery("security audit findings and compliance requirements for March deadline", "biz_adversarial", [BIZ_SECURITY_AUDIT, BIZ_SOC2, BIZ_GDPR]),
+    TestQuery("user experience degradation and engagement metric declines", "biz_adversarial", [BIZ_NPS_DROP, BIZ_CONVERSION_DROP, BIZ_MOBILE_ROADMAP]),
+    TestQuery("infrastructure reliability and service quality metrics", "biz_adversarial", [BIZ_SLA_BREACH, INCIDENT, K8S_HPA]),
+    TestQuery("business continuity and disaster recovery capabilities", "biz_adversarial", [INCIDENT, BIZ_ARCH_REVIEW, REPLICATION]),
+    TestQuery("growth metrics and cost management in operations", "biz_adversarial", [BIZ_MAU_GROWTH, BIZ_DATA_TEAM, RESOURCE_LIMITS]),
+    TestQuery("incident detection and response capabilities", "biz_adversarial", [BIZ_QBR, INCIDENT, BIZ_HIRE_SRE]),
+    TestQuery("monitoring and alerting for critical business processes", "biz_adversarial", [DATADOG, GRAFANA_DASH, BIZ_VENDOR_DATADOG]),
+    TestQuery("data integrity and pipeline reliability for analytics", "biz_adversarial", [MONTE_CARLO, DBT_FRESHNESS, BIZ_DATA_TEAM]),
+    TestQuery("team capacity and hiring for platform stability", "biz_adversarial", [BIZ_HIRE_SRE, BIZ_DATA_TEAM, BIZ_RETRO]),
+    TestQuery("customer complaints about website performance and transaction processing", "biz_adversarial", [BIZ_ACME_TIMEOUT, BIZ_NPS_DROP, BIZ_SLA_BREACH]),
+    TestQuery("platform updates and deprecation planning for legacy systems", "biz_adversarial", [BIZ_APIV1_DEPREC, BIZ_CHECKOUT_SUNSET, VERSIONING]),
 ]
 
 BIZ_TEMPORAL = [
@@ -752,6 +892,20 @@ BIZ_TEMPORAL = [
     TestQuery("what changed in January 2026 from a business perspective", "biz_temporal",
               [BIZ_APIV1_DEPREC, BIZ_SECURITY_AUDIT, BIZ_DATA_TEAM],
               "API v1 deprecation notice 1/20 + security audit 1/25 + data team expansion January"),
+    # new
+    TestQuery("what business metrics changed in February 2026", "biz_temporal", [BIZ_NPS_DROP, BIZ_MAU_GROWTH, BIZ_REC_CAROUSEL, AIRFLOW_BACKFILL]),
+    TestQuery("what incidents and issues occurred in March 2026", "biz_temporal", [INCIDENT, BIZ_QBR, BIZ_CONVERSION_DROP, BIZ_BIGRETAIL_IMPORT, BIZ_SLA_BREACH]),
+    TestQuery("what system failures happened between March 12 and March 20", "biz_temporal", [INCIDENT, BIZ_QBR, BIZ_CONVERSION_DROP]),
+    TestQuery("what are the deadlines for Q2 2026 initiatives", "biz_temporal", [BIZ_MOBILE_ROADMAP, BIZ_ARCH_REVIEW, BIZ_CHECKOUT_SUNSET, BIZ_HIRE_SRE]),
+    TestQuery("what needs to be completed by April 2026", "biz_temporal", [BIZ_CHECKOUT_SUNSET, BIZ_GDPR, BIZ_HIRE_SRE]),
+    TestQuery("what compliance work is due by May 1 2026", "biz_temporal", [BIZ_GDPR, BIZ_SOC2]),
+    TestQuery("what happened on Tuesday when the login system failed", "biz_temporal", [BIZ_LOGIN_FAILING, BUG, SESSION]),
+    TestQuery("what business milestones occurred at the March 15 retrospective", "biz_temporal", [BIZ_RETRO, BIZ_QBR, INCIDENT]),
+    TestQuery("what capacity changes occurred when the data team expanded", "biz_temporal", [BIZ_DATA_TEAM, AIRFLOW_ETL, FEAST_FEATURES, DBT_MODELS]),
+    TestQuery("what infrastructure decisions were made at the February 20 architecture review", "biz_temporal", [BIZ_ARCH_REVIEW, CIRCUIT_BREAKER, REPLICATION]),
+    TestQuery("what security work was mandated from the January 25 audit", "biz_temporal", [BIZ_SECURITY_AUDIT, VAULT_SECRETS, ISTIO_MTLS, BIZ_SOC2]),
+    TestQuery("what operational changes happened in January 2026", "biz_temporal", [BIZ_DATA_TEAM, BIZ_APIV1_DEPREC, BIZ_SECURITY_AUDIT, MFA]),
+    TestQuery("what product features launched in early 2026", "biz_temporal", [BIZ_REC_CAROUSEL, BIZ_MOBILE_ROADMAP, BIZ_APIV1_DEPREC]),
 ]
 
 ALL_QUERIES = (EXACT + PARAPHRASE + TANGENTIAL + ADVERSARIAL + NEGATIVE +
@@ -806,9 +960,14 @@ def ndcg(rels, k, n_rel):
     return dcg(rels, k) / idcg if idcg > 0 else 0.0
 
 
-def evaluate(queries, verbose=False):
+def evaluate(queries, verbose=False, progress=None):
     precisions, hit_rates, mrrs, ndcgs, fp_rates = [], [], [], [], []
-    for tq in queries:
+    base = progress[0] if progress else 0
+    total = progress[1] if progress else len(queries)
+    for qi, tq in enumerate(queries):
+        cur = base + qi + 1
+        if not verbose:
+            print(f"\r  [{cur}/{total}]", end="", flush=True)
         results = run_search(tq.query)
         top_k = results[:K]
         if tq.is_negative:
@@ -841,6 +1000,8 @@ def evaluate(queries, verbose=False):
                     c = r.get("l0", r.get("content", ""))[:70]
                     print(f"         -> {c}")
     m = {}
+    if not verbose:
+        print()  # newline after progress counter
     if precisions:
         n = len(precisions)
         m.update({"precision@3": sum(precisions)/n, "hit_rate@3": sum(hit_rates)/n,
@@ -871,9 +1032,11 @@ def main():
     print(f"  23 eng + 150 general + 500 AG News + 500 tech news")
     print("=" * 80)
     rows = []
+    done = 0
     for name, queries in cats:
-        print(f"\n{name} ({len(queries)} queries):")
-        m = evaluate(queries, verbose)
+        print(f"\n{name} ({len(queries)} queries)  [{done}/{total}]")
+        m = evaluate(queries, verbose, progress=(done, total))
+        done += len(queries)
         rows.append((name, m))
     pos = [(n, m) for n, m in rows if "hit_rate@3" in m]
     total_n = sum(m["n"] for _, m in pos)

@@ -123,6 +123,15 @@ async def call_tool(tool_name: str, payload: dict) -> dict:
         return await _handle_memory({"action": "graph_search", **payload})
     if tool_name == "ingest":
         return await _handle_memory({"action": "add", "content": payload.get("content", ""), "tag": payload.get("tag", "")})
+    if tool_name == "ingest-file":
+        file_path = payload.get("file_path", "")
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception as e:
+            return {"ok": False, "error": f"Failed to read file: {e}"}
+        tag = payload.get("tag", "")
+        return await _handle_memory({"action": "add", "content": content, "tag": tag})
     if tool_name == "health":
         _ensure_init()
         return {"status": "ok", "mode": "local"}

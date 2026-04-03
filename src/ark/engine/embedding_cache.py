@@ -50,6 +50,15 @@ class EmbeddingCache:
                 PRIMARY KEY (doc_id, agent_id)
             )
         """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS dream_state (
+                corpus        TEXT NOT NULL,
+                agent_id      TEXT NOT NULL,
+                last_dream_at TEXT,
+                last_doc_count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (corpus, agent_id)
+            )
+        """)
         self._migrate()
         self._conn.commit()
 
@@ -64,11 +73,14 @@ class EmbeddingCache:
             )
         if "last_accessed" not in cols:
             self._conn.execute("ALTER TABLE embeddings ADD COLUMN last_accessed TEXT")
+        if "inserted_at" not in cols:
+            self._conn.execute("ALTER TABLE embeddings ADD COLUMN inserted_at TEXT")
 
     def put(self, doc_id: str, corpus: str, vec: list[float]) -> None:
+        now = datetime.now(UTC).isoformat()
         self._conn.execute(
-            "INSERT OR REPLACE INTO embeddings (doc_id, corpus, dims, vec) VALUES (?, ?, ?, ?)",
-            (doc_id, corpus, len(vec), _pack(vec)),
+            "INSERT OR REPLACE INTO embeddings (doc_id, corpus, dims, vec, inserted_at) VALUES (?, ?, ?, ?, ?)",
+            (doc_id, corpus, len(vec), _pack(vec), now),
         )
         self._conn.commit()
 
@@ -257,6 +269,45 @@ class EmbeddingCache:
             "SELECT doc_id FROM embeddings WHERE corpus = ? AND access_count = 0 AND last_accessed IS NULL",
             (corpus,),
         ).fetchall()
+        return [row[0] for row in rows]
+
+    # ── Dream state (incremental dreaming) ──
+
+    def get_dream_state(self, corpus: str, agent_id: str) -> tuple[str | None, int]:
+        """Return (last_dream_at, last_doc_count) for this corpus+agent."""
+        row = self._conn.execute(
+            "SELECT last_dream_at, last_doc_count FROM dream_state WHERE corpus = ? AND agent_id = ?",
+            (corpus, agent_id),
+        ).fetchone()
+        return (row[0], row[1]) if row else (None, 0)
+
+    def set_dream_state(self, corpus: str, agent_id: str, doc_count: int) -> None:
+        """Update dream state after a dream cycle."""
+        now = datetime.now(UTC).isoformat()
+        self._conn.execute(
+            """INSERT INTO dream_state (corpus, agent_id, last_dream_at, last_doc_count)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(corpus, agent_id) DO UPDATE SET
+                   last_dream_at = excluded.last_dream_at,
+                   last_doc_count = excluded.last_doc_count""",
+            (corpus, agent_id, now, doc_count),
+        )
+        self._conn.commit()
+
+    def get_new_doc_ids(self, corpus: str, since: str | None) -> list[str]:
+        """Return doc_ids added after `since` timestamp (ISO format).
+
+        If since is None, returns all doc_ids (first dream cycle).
+        """
+        if since is None:
+            rows = self._conn.execute(
+                "SELECT doc_id FROM embeddings WHERE corpus = ?", (corpus,)
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT doc_id FROM embeddings WHERE corpus = ? AND inserted_at > ?",
+                (corpus, since),
+            ).fetchall()
         return [row[0] for row in rows]
 
     def close(self) -> None:

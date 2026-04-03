@@ -123,25 +123,16 @@ async def main():
     ark_home = os.environ.get("ARK_HOME", os.path.expanduser("~/.ark"))
     memory_dir = os.path.join(ark_home, "memory")
 
-    # Preserve embedding cache as warm cache (skip re-embedding existing docs)
-    embed_db_path = os.path.join(memory_dir, "embeddings.db")
-    warm_cache_path = os.path.join(ark_home, "_embeddings_warm.db")
-    if os.path.exists(embed_db_path):
-        shutil.copy2(embed_db_path, warm_cache_path)
-        import sqlite3
-        n = sqlite3.connect(warm_cache_path).execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
-        print(f"  Saved warm cache: {n} embeddings")
-
-    # Clear tantivy + graph (rebuild from scratch)
-    print("Clearing old index and graph...")
+    # Full clean — no warm cache so SmartChunker re-chunks and re-embeds everything
+    print("Clearing old index, graph, and embeddings (cold re-embed)...")
     if os.path.exists(memory_dir):
         shutil.rmtree(memory_dir)
     os.makedirs(memory_dir, exist_ok=True)
-
-    # Restore warm cache
-    if os.path.exists(warm_cache_path):
-        shutil.move(warm_cache_path, embed_db_path)
-        print("  Restored warm embedding cache")
+    # Also clean stale warm cache if any
+    warm_cache_path = os.path.join(ark_home, "_embeddings_warm.db")
+    for f in (warm_cache_path, warm_cache_path + "-shm", warm_cache_path + "-wal"):
+        if os.path.exists(f):
+            os.remove(f)
 
     # Force re-init with new model
     import ark.local as local

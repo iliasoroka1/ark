@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections import defaultdict
 from datetime import UTC, datetime
 
@@ -21,6 +22,7 @@ from ark.engine.index import (
     F_ATTRIBUTES, F_CHUNK_ATTRIBUTES, F_CHUNK_BODY, F_CHUNK_ID,
     F_CHUNK_TOKENS, F_CORPUS, F_ID, F_SOURCE_ID,
 )
+from ark.engine.query_expand import parse_negation_llm
 from ark.engine.temporal import detect_query_dates, detect_query_period_ids, temporal_proximity_score
 from ark.engine.tokenizer import tokenize_text
 from ark.engine.types import SearchErr, SearchHit, SearchParams, SearchScores
@@ -40,6 +42,41 @@ _PRF_DOCS = 3          # number of top cosine hits to extract terms from
 _PRF_TERMS = 12        # max terms to extract for pseudo-relevance feedback
 _PRF_MIN_SIM = 0.35    # minimum cosine similarity to consider a doc for PRF
 _TEMPORAL_WEIGHT = 1.5  # weight for temporal signal in RRF (only active when query has dates)
+
+
+_NEGATION_RE = re.compile(
+    r"\b(?:besides?|other than|excluding|except(?:\s+for)?|not\s+(?:about|related to|including|using)?|without|but not|(?:isn|aren|wasn|weren)['\u2019]t\s*(?:about|related to|using)?\s*)\s+(.+)",
+    re.IGNORECASE,
+)
+
+
+def _parse_negation(query: str) -> tuple[str, list[str]]:
+    """Extract negation terms from query.
+
+    Returns (clean_query, excluded_terms).
+    'auth changes besides OAuth and SSO' → ('auth changes', ['oauth', 'sso'])
+    """
+    m = _NEGATION_RE.search(query)
+    if not m:
+        return query, []
+    excluded_part = m.group(1).strip()
+    clean = query[:m.start()].strip()
+    # Split on 'and', 'or', commas
+    terms = re.split(r"\s+and\s+|\s+or\s+|,\s*", excluded_part, flags=re.IGNORECASE)
+    excluded = [t.strip().lower() for t in terms if t.strip()]
+    return clean or query, excluded
+
+
+def _negation_penalty(body: str, excluded_terms: list[str]) -> float:
+    """Return a penalty multiplier (0.0–1.0) based on how many excluded terms match."""
+    if not excluded_terms or not body:
+        return 1.0
+    body_lower = body.lower()
+    matches = sum(1 for t in excluded_terms if t in body_lower)
+    if matches == 0:
+        return 1.0
+    # Heavy penalty: 0.1 for 1 match, 0.01 for 2+
+    return 0.1 ** matches
 
 
 class Searcher:
@@ -70,6 +107,17 @@ class Searcher:
     ) -> Result[list[SearchHit], SearchErr]:
         if params is None:
             params = SearchParams()
+
+        # ── Parse negation (regex first, LLM fallback) ──
+        clean_query, excluded_terms = _parse_negation(query)
+        if not excluded_terms:
+            llm_excluded = await parse_negation_llm(query)
+            if llm_excluded:
+                excluded_terms = llm_excluded
+                log.debug("Negation via LLM: excluded=%s", excluded_terms)
+        else:
+            query = clean_query
+            log.debug("Negation via regex: excluded=%s clean=%r", excluded_terms, clean_query)
 
         query_date_ranges = detect_query_dates(query)
         query_vec = None
@@ -166,7 +214,8 @@ class Searcher:
                           params, self._embed_cache,
                           bm25_expanded_docs=bm25_expanded_docs,
                           agent_id=agent_id,
-                          query_date_ranges=query_date_ranges)
+                          query_date_ranges=query_date_ranges,
+                          excluded_terms=excluded_terms)
 
         # ── Graph expansion ──
         if self._graph_store is not None and self._embed_cache is not None and query_vec is not None:
@@ -313,7 +362,8 @@ _EXPANDED_BM25_WEIGHT = 0.5  # weight multiplier for LLM-expanded BM25 terms
 
 
 def _rrf_merge(cosine_results, bm25_docs, searcher, schema, params, embed_cache=None,
-               bm25_expanded_docs=None, agent_id="default", query_date_ranges=None):
+               bm25_expanded_docs=None, agent_id="default", query_date_ranges=None,
+               excluded_terms=None):
     """Merge full-precision cosine results with BM25 results via score-weighted RRF.
 
     cosine_results: list of (doc_id, cosine_similarity) from embedding cache
@@ -412,6 +462,18 @@ def _rrf_merge(cosine_results, bm25_docs, searcher, schema, params, embed_cache=
                         SearchScores(rrf=old_scores.rrf * factor, embedding=old_scores.embedding, bm25=old_scores.bm25),
                         cosine_sim,
                     )
+
+    # ── Negation penalty: demote docs matching excluded terms ──
+    if excluded_terms:
+        for doc_id in list(scored):
+            body, _, _ = _lookup_doc_content(doc_id, searcher, schema)
+            penalty = _negation_penalty(body, excluded_terms)
+            if penalty < 1.0:
+                old_scores, cosine_sim = scored[doc_id]
+                scored[doc_id] = (
+                    SearchScores(rrf=old_scores.rrf * penalty, embedding=old_scores.embedding, bm25=old_scores.bm25),
+                    cosine_sim,
+                )
 
     # Rank and build hits
     ranked = sorted(scored.items(), key=lambda x: x[1][0].rrf, reverse=True)

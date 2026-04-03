@@ -142,6 +142,80 @@ def _regex_outline(source: str, lang: str) -> list[tuple[int, int, str, str]]:
     return symbols
 
 
+class SemanticChunker:
+    """Embedding-aware chunker backed by chonkie's SemanticChunker.
+
+    Splits text at topic boundaries by embedding adjacent sentences and
+    detecting similarity drops. Uses Model2Vec (potion-base-32M) by default —
+    fast enough for per-sentence embedding during chunking.
+
+    Requires the ``chonkie`` optional dependency group.
+    """
+
+    __slots__ = ("_chunker",)
+
+    def __init__(
+        self,
+        model: str = "minishlab/potion-base-32M",
+        chunk_size: int = 2048,
+        threshold: float = 0.5,
+        similarity_window: int = 3,
+    ) -> None:
+        from chonkie import SemanticChunker as _SemanticChunker
+
+        self._chunker = _SemanticChunker(
+            embedding_model=model,
+            chunk_size=chunk_size,
+            threshold=threshold,
+            similarity_window=similarity_window,
+        )
+
+    def chunks(self, text: str) -> list[str]:
+        return [c.text for c in self._chunker.chunk(text)]
+
+
+class SmartChunker:
+    """Auto-selects chunking strategy by file extension.
+
+    - .md/.mdx → MarkdownChunker
+    - Known code files → SymbolChunker (with TextChunker fallback)
+    - Everything else → TextChunker (or SemanticChunker if ``semantic=True``)
+
+    Pass ``semantic=True`` to split plain text at topic boundaries rather than
+    token counts. Requires the ``chonkie`` optional dependency group. Slower
+    than the default but produces more coherent chunks for prose-heavy content.
+    """
+
+    __slots__ = ("_text", "_md", "_capacity")
+
+    _CODE_EXTS = frozenset(
+        {
+            ".py", ".rs", ".ts", ".tsx", ".js", ".jsx", ".go",
+            ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".java", ".rb",
+        }
+    )
+
+    _MD_EXTS = frozenset({".md", ".mdx"})
+
+    def __init__(self, capacity: int = 256, semantic: bool = False) -> None:
+        self._text = SemanticChunker(chunk_size=capacity) if semantic else TextChunker(capacity=capacity)
+        self._md = MarkdownChunker(capacity=capacity)
+        self._capacity = capacity
+
+    def chunks(self, text: str) -> list[str]:
+        """Chunk plain text using the default text/semantic chunker."""
+        return self._text.chunks(text)
+
+    def for_file(self, path: str) -> "Chunker":
+        """Return the best chunker for the given file path."""
+        ext = Path(path).suffix.lower()
+        if ext in self._MD_EXTS:
+            return self._md
+        if ext in self._CODE_EXTS:
+            return SymbolChunker(path=path, capacity=self._capacity * 2)
+        return self._text
+
+
 class SymbolChunker:
     __slots__ = ("_fallback", "_path")
 

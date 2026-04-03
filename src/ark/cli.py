@@ -40,12 +40,13 @@ def search(query, limit, use_case, graph):
     """Search the knowledge graph."""
 
     async def _search():
-        path = "/graph-search" if graph else "/search"
+        from ark.local import call_tool
+        tool = "graph-search" if graph else "search"
         payload = {"query": query, "limit": limit}
         if use_case:
             payload["use_case"] = use_case
         try:
-            result = await post(path, payload)
+            result = await call_tool(tool, payload)
             print(json.dumps(result, indent=2))
         except Exception as e:
             click.echo(f"Error: {e}", err=True)
@@ -63,13 +64,14 @@ def ingest(content, title, tag, node_type):
     """Ingest text into the knowledge graph."""
 
     async def _ingest():
+        from ark.local import call_tool
         payload = {"content": content, "type": node_type}
         if title:
             payload["title"] = title
         if tag:
             payload["tag"] = tag
         try:
-            result = await post("/ingest", payload)
+            result = await call_tool("ingest", payload)
             print(json.dumps(result, indent=2))
         except Exception as e:
             click.echo(f"Error: {e}", err=True)
@@ -86,13 +88,14 @@ def ingest_file(file_path, title, tag):
     """Ingest a file into the knowledge graph."""
 
     async def _ingest_file():
+        from ark.local import call_tool
         payload = {"file_path": file_path}
         if title:
             payload["title"] = title
         if tag:
             payload["tag"] = tag
         try:
-            result = await post("/ingest-file", payload)
+            result = await call_tool("ingest-file", payload)
             print(json.dumps(result, indent=2))
         except Exception as e:
             click.echo(f"Error: {e}", err=True)
@@ -159,8 +162,9 @@ def analyze():
     """Run spectral analysis on the knowledge graph."""
 
     async def _analyze():
+        from ark.local import call_tool
         try:
-            result = await post("/analyze", {})
+            result = await call_tool("analyze", {})
             print(json.dumps(result, indent=2))
         except Exception as e:
             click.echo(f"Error: {e}", err=True)

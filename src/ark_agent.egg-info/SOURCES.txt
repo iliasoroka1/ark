@@ -1,4 +1,5 @@
 LICENSE
+README.md
 pyproject.toml
 src/ark/__init__.py
 src/ark/cli.py
@@ -9,16 +10,21 @@ src/ark/memory.py
 src/ark/rag.py
 src/ark/serve.py
 src/ark/session.py
+src/ark/setup.py
 src/ark/engine/__init__.py
 src/ark/engine/circuit_breaker.py
+src/ark/engine/dreamer.py
 src/ark/engine/embed.py
 src/ark/engine/embedding_cache.py
 src/ark/engine/graph.py
 src/ark/engine/graph_store.py
 src/ark/engine/index.py
+src/ark/engine/query_expand.py
 src/ark/engine/result.py
 src/ark/engine/search.py
 src/ark/engine/spectral.py
+src/ark/engine/surprisal.py
+src/ark/engine/temporal.py
 src/ark/engine/tokenizer.py
 src/ark/engine/types.py
 src/ark/tools/__init__.py

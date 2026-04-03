@@ -99,3 +99,71 @@ async def expand_query(query: str) -> str | None:
     except Exception as e:
         log.debug(f"Query expansion failed: {e}")
         return None
+
+
+_NEGATION_PROMPT = """Analyze this search query for negation/exclusion intent.
+If the user wants to EXCLUDE certain topics, extract them.
+Output format: EXCLUDE: term1, term2
+If there is NO exclusion intent, output: NONE
+
+Examples:
+Query: auth changes besides OAuth and SSO
+EXCLUDE: oauth, sso
+
+Query: what monitoring tools do we use
+NONE
+
+Query: infrastructure work that doesn't involve the database
+EXCLUDE: database
+
+Query: everything about payments except the outage
+EXCLUDE: outage
+
+Query: {query}"""
+
+
+async def parse_negation_llm(query: str) -> list[str] | None:
+    """Use LLM to detect negation intent when regex fails.
+
+    Returns list of excluded terms, empty list if no negation, or None on failure.
+    """
+    if os.environ.get("ARK_NO_LLM_EXPAND"):
+        return None
+
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        return None
+
+    try:
+        import aiohttp
+
+        prompt = _NEGATION_PROMPT.format(query=query)
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "google/gemini-3.1-flash-lite-preview",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 40,
+                    "temperature": 0.0,
+                },
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                content = data["choices"][0]["message"]["content"].strip()
+                if content.upper().startswith("NONE"):
+                    return []
+                if content.upper().startswith("EXCLUDE:"):
+                    terms_str = content[len("EXCLUDE:"):].strip()
+                    terms = [t.strip().lower() for t in terms_str.split(",") if t.strip()]
+                    return terms
+                return None
+    except Exception as e:
+        log.debug(f"Negation LLM parse failed: {e}")
+        return None

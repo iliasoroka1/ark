@@ -573,19 +573,45 @@ async def dream(
     corpus = f"agent:{agent_id}"
     result = DreamResult()
 
-    # ── Phase 0: Surprisal sampling ──────────────────────────────
+    # ── Incremental: find new docs since last dream ──────────────
+    new_doc_ids: list[str] = []
+    last_dream_at: str | None = None
+    if indexer.embed_cache is not None:
+        last_dream_at, last_count = indexer.embed_cache.get_dream_state(corpus, agent_id)
+        new_doc_ids = indexer.embed_cache.get_new_doc_ids(corpus, last_dream_at)
+        log.info(
+            "dreamer_incremental: agent_id=%s new_docs=%d last_dream=%s",
+            agent_id, len(new_doc_ids), last_dream_at or "never",
+        )
+
+    # ── Phase 0: Surprisal sampling (only on new docs if incremental) ──
     if hints is None and indexer.embed_cache is not None:
         observations = indexer.embed_cache.get_corpus(corpus)
         if len(observations) >= _MIN_OBSERVATIONS:
-            hints = compute_surprisal(
-                observations,
-                k=_SURPRISAL_K,
-                top_percent=_SURPRISAL_TOP_PERCENT,
-            )
+            if new_doc_ids and last_dream_at is not None:
+                # Incremental: only score new docs against full corpus
+                new_set = set(new_doc_ids)
+                new_obs = [(did, vec) for did, vec in observations if did in new_set]
+                if new_obs:
+                    hints = compute_surprisal(
+                        new_obs,
+                        k=_SURPRISAL_K,
+                        top_percent=min(1.0, _SURPRISAL_TOP_PERCENT * len(observations) / max(1, len(new_obs))),
+                        reference=observations,
+                    )
+                else:
+                    hints = []
+            else:
+                # First dream: full corpus surprisal
+                hints = compute_surprisal(
+                    observations,
+                    k=_SURPRISAL_K,
+                    top_percent=_SURPRISAL_TOP_PERCENT,
+                )
             result.surprisal_count = len(hints)
             log.info(
-                "dreamer_surprisal_done: agent_id=%s total=%d anomalies=%d",
-                agent_id, len(observations), len(hints),
+                "dreamer_surprisal_done: agent_id=%s total=%d new=%d anomalies=%d",
+                agent_id, len(observations), len(new_doc_ids), len(hints),
             )
         else:
             log.info(
@@ -596,8 +622,19 @@ async def dream(
     # ── Phase 1: Deduction specialist ────────────────────────────
     executor = _ToolExecutor(indexer, searcher, corpus, agent_id)
 
-    # Build the user prompt with optional hints
+    # Build the user prompt with incremental focus
     user_parts = []
+    if new_doc_ids and last_dream_at is not None:
+        user_parts.append(
+            f"Since the last consolidation, {len(new_doc_ids)} new observations were added. "
+            "Focus on how these new memories relate to existing knowledge.\n"
+        )
+        for did in new_doc_ids[:15]:
+            user_parts.append(f"- NEW: [{did}]")
+        if len(new_doc_ids) > 15:
+            user_parts.append(f"  ... and {len(new_doc_ids) - 15} more")
+        user_parts.append("")
+
     if hints:
         user_parts.append(
             "The following observations scored as geometrically anomalous "
@@ -610,7 +647,7 @@ async def dream(
             "\nStart by searching for context around these anomalies. "
             "But also explore freely — these are hints, not constraints."
         )
-    else:
+    elif not new_doc_ids:
         user_parts.append(
             "Explore the observation space. Search for knowledge updates "
             "(same topic, different values), logical implications, and contradictions. "
@@ -639,6 +676,11 @@ async def dream(
     # ── Phase 2: Prune stale observations ─────────────────────────
     result.pruned_stale = _prune_stale(indexer, corpus, agent_id)
 
+    # ── Persist dream state for incremental next time ────────────
+    if indexer.embed_cache is not None:
+        doc_count = indexer.embed_cache.count(corpus)
+        indexer.embed_cache.set_dream_state(corpus, agent_id, doc_count)
+
     log.info(
         "dreamer_done: agent_id=%s iterations=%d created=%d deleted=%d "
         "pruned_stale=%d input_tokens=%d output_tokens=%d",
@@ -658,6 +700,8 @@ async def maybe_dream(
 
     Call this from the deriver after storing new observations. Returns None
     if conditions aren't met (not enough observations).
+
+    Uses persistent state in SQLite (survives process restarts).
     """
     if indexer.embed_cache is None:
         return None
@@ -668,9 +712,8 @@ async def maybe_dream(
     if count < _MIN_OBSERVATIONS:
         return None
 
-    # Simple gating: dream every _MIN_OBSERVATIONS new observations.
-    state_key = f"_dream_last_count_{agent_id}"
-    last_count = _dream_state.get(state_key, 0)
+    # Persistent gating: dream every _MIN_OBSERVATIONS new observations.
+    _last_dream_at, last_count = indexer.embed_cache.get_dream_state(corpus, agent_id)
 
     if count - last_count < _MIN_OBSERVATIONS:
         return None
@@ -681,13 +724,7 @@ async def maybe_dream(
     )
 
     try:
-        result = await dream(agent_id, indexer, searcher)
-        _dream_state[state_key] = count
-        return result
+        return await dream(agent_id, indexer, searcher)
     except Exception:
         log.exception("dreamer_failed: agent_id=%s", agent_id)
         return None
-
-
-# Module-level state for dream gating (reset on process restart)
-_dream_state: dict[str, int] = {}
